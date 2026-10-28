@@ -22,18 +22,22 @@ jobs:
 
       - uses: Randomblock1/theos-action@v1
 
+      # theos-action installs GNU make but its own PATH line never reaches GITHUB_ENV.
+      - name: GNU make on PATH
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
       - name: Install cyan
         run: pip3 install --break-system-packages https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Fetch FLEXing
         if: ${{ inputs.flex }}
-        run: gh release download -R PoomSmart/FLEXing -p '*arm.deb' -D out --clobber
+        run: gh release download -R PoomSmart/FLEXing -p '*.deb' -D out/flex --clobber
 
       - name: Build
         run: |
           chmod +x scripts/*.sh
           if [[ "${{ inputs.flex }}" == "true" ]]; then
-            ./scripts/build.sh --flex "$(ls out/*FLEX*.deb | head -1)"
+            ./scripts/build.sh --flex "$(ls out/flex/*.deb | head -1)"
           else
             ./scripts/build.sh
           fi
@@ -42,4 +46,6 @@ jobs:
         with:
           name: LiquidBird-ipa
           path: out/LiquidBird.ipa
+          if-no-files-found: error
+          compression-level: 0  # an IPA is already a zip
           retention-days: 7
