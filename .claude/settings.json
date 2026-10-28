@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(./scripts/*)",
+      "Bash(gh run:*)",
+      "Bash(gh workflow:*)",
+      "Bash(gh release download:*)",
+      "Bash(git:*)"
+    ],
+    "deny": [
+      "Bash(gh release create:*)",
+      "Read(**/*.p12)",
+      "Read(**/*.mobileprovision)"
+    ]
+  }
+}

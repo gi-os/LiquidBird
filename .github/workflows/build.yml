@@ -1,0 +1,45 @@
+name: build
+on:
+  workflow_dispatch:
+    inputs:
+      flex:
+        description: Inject FLEXing for class discovery
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+
+      - uses: Randomblock1/theos-action@v1
+
+      - name: Install cyan
+        run: pip3 install --break-system-packages https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+
+      - name: Fetch FLEXing
+        if: ${{ inputs.flex }}
+        run: gh release download -R PoomSmart/FLEXing -p '*arm.deb' -D out --clobber
+
+      - name: Build
+        run: |
+          chmod +x scripts/*.sh
+          if [[ "${{ inputs.flex }}" == "true" ]]; then
+            ./scripts/build.sh --flex "$(ls out/*FLEX*.deb | head -1)"
+          else
+            ./scripts/build.sh
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiquidBird-ipa
+          path: out/LiquidBird.ipa
+          retention-days: 7

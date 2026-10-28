@@ -1,0 +1,9 @@
+Package: com.gios.liquidbird
+Name: LiquidBird
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: Liquid Glass, no Grok, no Live for NeoFreeBird
+Maintainer: gi-os
+Author: gi-os
+Section: Tweaks
+Depends: mobilesubstrate
