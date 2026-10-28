@@ -13,14 +13,16 @@ done
 
 mkdir -p out
 if [[ -z "$IPA" ]]; then
-  gh release download -R NeoFreeBird/app -p '*.ipa' -D out --clobber
-  IPA="$(ls -t out/*.ipa | grep -v LiquidBird | head -1)"
+  # The release also has an X-branded IPA and TrollStore .tipa files; take the Twitter-branded sideload one.
+  gh release download -R NeoFreeBird/app -p 'NeoFreeBird-sideloaded-Twitter_*.ipa' -D out --clobber
+  IPA="$(ls -t out/NeoFreeBird-sideloaded-Twitter_*.ipa | head -1)"
 fi
 
 ./scripts/patch_glass.sh "$IPA" out/glass.ipa
+rm -rf packages   # make clean keeps old debs, and every deb here gets injected
 make clean package FINALPACKAGE=1
 
 DEBS=(packages/*.deb)
 [[ -n "$FLEX" ]] && DEBS+=("$FLEX")
-cyan -i out/glass.ipa -o out/LiquidBird.ipa -f "${DEBS[@]}" -s
+cyan -i out/glass.ipa -o out/LiquidBird.ipa -f "${DEBS[@]}" -s --overwrite
 echo "done: out/LiquidBird.ipa (unsigned, sign with SideStore/Sideloadly/Feather)"

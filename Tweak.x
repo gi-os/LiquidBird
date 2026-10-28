@@ -1,6 +1,14 @@
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 #define LB_GLASS_TAG 0xB1D
+
+// Placeholder classes (unverified, see CLAUDE.md). Declared so the hooks compile; each one is
+// hooked from its own Logos group, set up only if the class exists, so a wrong name is a no-op
+// instead of a launch crash.
+@interface T1TabBarView : UIView @end
+@interface TFNSpacesBarView : UIView @end
+@interface T1LiveBroadcastCell : UIView @end
 
 // ---------- helpers ----------
 
@@ -22,6 +30,7 @@ static BOOL LBIsGrokString(NSString *s) {
 
 // ---------- Liquid Glass tab bar / rail ----------
 
+%group TabBar
 %hook T1TabBarView  // placeholder: confirm in FLEX
 - (void)layoutSubviews {
     %orig;
@@ -45,6 +54,7 @@ static BOOL LBIsGrokString(NSString *s) {
         g.layer.masksToBounds = YES;
     }
 }
+%end
 %end
 
 // ---------- Grok removal ----------
@@ -81,11 +91,22 @@ static BOOL LBIsGrokString(NSString *s) {
 
 // ---------- Live / Spaces removal ----------
 
+%group Spaces
 %hook TFNSpacesBarView      // placeholder
 - (void)didMoveToWindow { %orig; self.hidden = YES; }
 - (CGSize)intrinsicContentSize { return CGSizeZero; }
 %end
+%end
 
+%group Live
 %hook T1LiveBroadcastCell   // placeholder
 - (void)didMoveToWindow { %orig; self.hidden = YES; }
 %end
+%end
+
+%ctor {
+    %init;  // UIKit hooks, always present
+    if (objc_getClass("T1TabBarView")) %init(TabBar);
+    if (objc_getClass("TFNSpacesBarView")) %init(Spaces);
+    if (objc_getClass("T1LiveBroadcastCell")) %init(Live);
+}
