@@ -9,7 +9,9 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 4. Ads, premium upsells and banners: rely on NeoFreeBird's BHTwitter toggles first; hook only what survives.
 
 ## Layout
-- `Tweak.x`             all hooks (Logos)
+- `Tweak.x`             Grok/Live removal, Liquid Glass default (Logos)
+- `Tiling.x`            wide windows (iPhone Duo unfolded): Twitter for iPad's layout after gi-os/twitter's TabStackView/ClassicSidebar. Step 1: sidebar down the trailing edge instead of the tab bar and compose button, current tab as a centred column card. Step 2 (todo): tweets/profiles/links open as further columns.
+- `Debug.x`             three-finger long press copies the view/VC hierarchy (classes and frames, no text) for Giovanni to paste; how class names get verified without FLEX
 - `LiquidBird.plist`    bundle filter (com.atebits.Tweetie2)
 - `scripts/patch_glass.sh <in.ipa> <out.ipa>`  strips UIDesignRequiresCompatibility so stock UIKit chrome gets Liquid Glass; raises the Mach-O SDK to 26.0 only if it's older (never lowers it, keeps minos). Needs Xcode `vtool`, macOS only
 - `scripts/build.sh`    full pipeline: fetch NeoFreeBird IPA, patch, `make package`, inject with `cyan`
@@ -20,6 +22,7 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 ## Rules
 - Class names marked `// placeholder` are unverified. Confirm in FLEX before relying on them: the IPA already ships BHTwitter's FLEX (`libbhFLEX.dylib`, try its toggle in BHTwitter settings first), else inject FLEXing (`scripts/build.sh --flex <FLEXing.deb>`, or run the workflow with `flex`). Placeholder hooks live in their own `%group`, initialised in `%ctor` only if `objc_getClass` finds the class; keep it that way (Logos doesn't check, and a nil class can crash at launch). Prefer matching on accessibilityLabel/identifier over private class names; they survive app updates.
 - Guard every iOS 26 API with `if (@available(iOS 26, *))`. Deployment target stays 15.0.
+- Finding classes: `nm`/strings miss most of them; dump ObjC metadata (class and category method lists) from the frameworks in the NeoFreeBird IPA (T1Twitter, XServiceLibraries, XAppLibraries hold the app). Navigation: T1TabbedAppNavigationViewController (tabs, `currentTabNavigationController`), T1TabBarViewController (`tabViews`, `setTabBarHidden:withDuration:completion:`), TFNCustomTabBar, TFNFloatingActionButton, T1TabNavigationController (`showComposeFromBarButtonItem:`).
 - No global hooks on `UIView -layoutSubviews`; too hot. `UIControl -didMoveToWindow` is the widest acceptable hook.
 - Never commit IPAs, decrypted binaries, or signing certs. `.gitignore` covers them.
 - Signing secrets (synced from the gi-os/ios-certs hub) go only to the `sign` job, which runs no third-party code; never pass them to `ipa`. Registered so far: Giovanni's iPhone and iPad; the ad-hoc profile lasts until Sep 2027.
