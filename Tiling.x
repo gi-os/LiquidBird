@@ -563,6 +563,7 @@ static BOOL LBBarOnHome(UINavigationBar *bar) {
 
 static const void *kLBHomeShift = &kLBHomeShift;
 static const void *kLBHomeRowBottom = &kLBHomeRowBottom;
+static const void *kLBHomeExtra = &kLBHomeExtra;
 
 static void LBShiftHome(UIViewController *home) {
     UIView *view = home.viewIfLoaded, *container = view.superview;
@@ -604,7 +605,16 @@ static void LBShiftHome(UIViewController *home) {
     for (UIViewController *c in home.childViewControllers)
         if ([NSStringFromClass(c.class) rangeOfString:@"SegmentedViewController"].location != NSNotFound) pager = c;
     if (!pager) return;
-    CGFloat extra = hide ? MAX(0, round(rowBottom - view.safeAreaInsets.top)) : 0;
+    // Measured only once Home has settled on top, shifted, with no navigation transition running (sliding
+    // back in from a tweet, its safe area reads as if unshifted for a moment), and kept: any change to it
+    // moves the timeline's scroll position.
+    CGFloat measured = [objc_getAssociatedObject(home, kLBHomeExtra) doubleValue];
+    BOOL settled = nav.topViewController == home && !nav.transitionCoordinator && fabs(view.frame.origin.y + shift) < 0.5;
+    if (hide && settled && rowBottom > 0) {
+        measured = MAX(0, round(rowBottom - view.safeAreaInsets.top));
+        objc_setAssociatedObject(home, kLBHomeExtra, @(measured), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat extra = hide ? measured : 0;
     UIEdgeInsets insets = pager.additionalSafeAreaInsets;
     if (fabs(insets.top - extra) < 0.5) return;
     insets.top = extra;

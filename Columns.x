@@ -9,10 +9,10 @@
 // direction you flick; a column's close button closes it and the ones after it. Leaving the tab closes
 // them; narrowing (folding) puts them back on the tab's own stack, in order.
 //
-// Each column is X's own navigation controller (XNAVNavigationController), so its screens get X's bars;
-// the columns are children of a plain container under the app's root (beside the sidebar), not of X's
-// tab bar controller, which expects only its own tabs. A push from inside a column opens the next
-// column. If opening a column throws, the push goes ahead as usual instead.
+// Each column is a plain navigation controller of its own (LBColumnNavigationController: creating X's
+// XNAVNavigationController outside its tabs crashed), in a container under the app's root beside the
+// sidebar, not in X's tab bar controller, which expects only its own tabs. A push from inside a column
+// opens the next column. If opening a column throws, the push goes ahead as usual instead.
 
 @interface XNAVNavigationController : UINavigationController
 @end
@@ -22,7 +22,6 @@
 // gi-os/twitter's ColumnLayout: columns prefer 476pt, need 400, and leave at least a 160pt sliver of
 // what they came from.
 static const CGFloat LBCPreferred = 476, LBCMinimum = 400, LBCSliver = 160;
-static const void *kLBCColumnOf = &kLBCColumnOf;
 static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns back onto the stack
 
 // The sidebar's strip down the trailing edge (Tiling.x): the safe area there, or its default.
@@ -36,12 +35,13 @@ static CGFloat LBCAvailable(UIWindow *w) { return w ? w.bounds.size.width - LBCS
 // Room for a column and the sliver beside the sidebar: the Duo unfolded, not folded.
 static BOOL LBCColumnsWanted(UIWindow *w) { return LBCAvailable(w) >= LBCMinimum + LBCSliver; }
 
+@class LBCStrip;
+@interface LBColumnNavigationController : UINavigationController
+@property (nonatomic, weak) LBCStrip *strip;
+@end
+
 static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
-    Class xnav = objc_getClass("XNAVNavigationController");
-    Class bar = objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar");
-    UINavigationController *nav = xnav ? [[xnav alloc] initWithNavigationBarClass:bar toolbarClass:nil]
-                                       : [[UINavigationController alloc] init];
-    [nav setViewControllers:@[vc] animated:NO];
+    LBColumnNavigationController *nav = [[LBColumnNavigationController alloc] initWithRootViewController:vc];
     nav.view.accessibilityIdentifier = @"LBColumn";   // Tiling.x keeps a column's bar (its ✕)
     return nav;
 }
@@ -163,7 +163,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     [self closeAfter:found == NSNotFound ? -1 : (NSInteger)found animated:NO];
     UIViewController *parent = self.parent;
     UINavigationController *nav = LBCMakeNavigation(vc);
-    objc_setAssociatedObject(nav, kLBCColumnOf, self, OBJC_ASSOCIATION_ASSIGN);
+    ((LBColumnNavigationController *)nav).strip = self;
     [parent addChildViewController:nav];
     UIView *card = [self cardFor:nav];
     [_cards addObject:card];
@@ -247,6 +247,22 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 static const void *kLBCContainer = &kLBCContainer;
 
+@implementation LBColumnNavigationController
+// A push inside a column opens the next column (folded, there are no columns: it stacks as usual).
+- (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
+    LBCStrip *strip = self.strip;
+    if (!LBCPassThrough && strip && self.viewControllers.count && LBCColumnsWanted(self.viewIfLoaded.window)) {
+        @try {
+            [strip open:vc after:self animated:animated];
+            return;
+        } @catch (NSException *e) {
+            NSLog(@"LiquidBird: couldn't open a column (%@), pushing instead", e);
+        }
+    }
+    [super pushViewController:vc animated:animated];
+}
+@end
+
 // The strip over the content, left of the sidebar: under the app's root view controller, in a plain
 // container that holds the columns' navigation controllers. One per window.
 static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
@@ -278,50 +294,25 @@ static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
     return strip;
 }
 
-// In the tab's own stack X's chrome keeps a screen's content below the bar; a column's navigation isn't
-// one of X's tabs, so it's done here: the top screen's safe area reaches down to the bar's bottom.
-static void LBCKeepBelowBar(UINavigationController *nav) {
-    UIViewController *top = nav.topViewController;
-    UINavigationBar *bar = nav.navigationBar;
-    if (!top.isViewLoaded || !bar) return;
-    BOOL shown = !nav.navigationBarHidden && !bar.hidden && bar.alpha > 0.01;
-    CGFloat barBottom = shown ? CGRectGetMaxY([nav.view convertRect:bar.bounds fromView:bar]) : 0;
-    CGFloat base = top.view.safeAreaInsets.top - top.additionalSafeAreaInsets.top;
-    CGFloat need = MAX(0, round(barBottom - base));
-    UIEdgeInsets extra = top.additionalSafeAreaInsets;
-    if (fabs(extra.top - need) < 0.5) return;
-    extra.top = need;
-    top.additionalSafeAreaInsets = extra;
-}
-
 %group Columns
 %hook XNAVNavigationController
-- (void)viewDidLayoutSubviews {
-    %orig;
-    if (objc_getAssociatedObject(self, kLBCColumnOf)) LBCKeepBelowBar(self);
-}
-
 - (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
     if (LBCPassThrough || !vc || self.viewControllers.count == 0) { %orig; return; }
     UIWindow *w = self.viewIfLoaded.window;
     if (!LBCColumnsWanted(w)) { %orig; return; }
-    LBCStrip *owner = objc_getAssociatedObject(self, kLBCColumnOf);
-    // Pushed on a tab's own stack (not in a sheet), or from inside a column.
+    // Pushed on a tab's own stack, not in a sheet.
     UIViewController *tabs = self.parentViewController;
-    BOOL tabStack = !owner && !self.presentingViewController &&
-                    [tabs isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")];
-    if (!owner && !tabStack) { %orig; return; }
-    LBCStrip *strip = owner ?: LBCStripFor(w, YES);
+    if (self.presentingViewController || ![tabs isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")]) {
+        %orig;
+        return;
+    }
+    LBCStrip *strip = LBCStripFor(w, YES);
     if (!strip) { %orig; return; }
     @try {
-        if (owner) {
-            [strip open:vc after:self animated:animated];
-        } else {
-            if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
-            strip.rootNavigation = self;
-            // After the column last touched, or from the root (the sliver), replacing every column.
-            [strip open:vc after:strip.touchedColumn animated:animated];
-        }
+        if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
+        strip.rootNavigation = self;
+        // After the column last touched, or from the root (the sliver), replacing every column.
+        [strip open:vc after:strip.touchedColumn animated:animated];
     } @catch (NSException *e) {
         NSLog(@"LiquidBird: couldn't open a column (%@), pushing instead", e);
         @try { [strip closeAfter:-1 animated:NO]; } @catch (NSException *ignored) {}
@@ -348,8 +339,5 @@ static void LBCKeepBelowBar(UINavigationController *nav) {
 %end
 
 %ctor {
-    // Off until opening a column stops crashing (not an Objective-C exception, so the @try doesn't help):
-    // the defaults key liquidbird_columns turns them on for testing.
-    if (![NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_columns"]) return;
     if (objc_getClass("XNAVNavigationController") && objc_getClass("_TtC11XNavigation16TabBarController")) %init(Columns);
 }
