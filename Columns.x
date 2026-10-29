@@ -394,7 +394,18 @@ static UINavigationController *LBCExploreTab(UIViewController *tabs) {
     return nil;
 }
 
-static BOOL LBCFeedOnRight(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_feed_right"]; }
+// Where the narrow feed sits: -1 left, 0 centre (black either side, no room for Explore), 1 right. Shared
+// with the sidebar logo's menu (Tiling.x). Before the centre, only liquidbird_feed_right said.
+NSInteger LBCFeedPosition(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    id side = [defaults objectForKey:@"liquidbird_feed_side"];
+    if (side) return MAX(-1, MIN(1, [side integerValue]));
+    return [defaults boolForKey:@"liquidbird_feed_right"] ? 1 : -1;
+}
+void LBCSetFeedPosition(NSInteger side) {
+    [NSUserDefaults.standardUserDefaults setInteger:MAX(-1, MIN(1, side)) forKey:@"liquidbird_feed_side"];
+}
+static BOOL LBCFeedOnRight(void) { return LBCFeedPosition() == 1; }
 // Explore beside the feed can be turned off (the sidebar logo's menu): the feed stays narrow, on its
 // side, with black beside it.
 static BOOL LBCExploreEnabled(void) {
@@ -402,8 +413,8 @@ static BOOL LBCExploreEnabled(void) {
     return on ? [on boolValue] : YES;
 }
 
-// A two-finger swipe left or right moves the feed to that side, Explore to the other (one finger stays
-// the timelines' own swipe between For you and Following).
+// A two-finger swipe left or right moves the feed a step that way (left, centre, right), Explore to the
+// other side (one finger stays the timelines' own swipe between For you and Following).
 @interface LBCSwipe : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UIViewController *tabs;
 - (void)relayout;
@@ -414,9 +425,9 @@ static BOOL LBCExploreEnabled(void) {
     if (pan.state != UIGestureRecognizerStateEnded) return;
     CGPoint d = [pan translationInView:pan.view];
     if (fabs(d.x) < 60 || fabs(d.x) < 2 * fabs(d.y)) return;
-    BOOL right = d.x > 0;
-    if (right == LBCFeedOnRight()) return;
-    [NSUserDefaults.standardUserDefaults setBool:right forKey:@"liquidbird_feed_right"];
+    NSInteger side = LBCFeedPosition(), next = MAX(-1, MIN(1, side + (d.x > 0 ? 1 : -1)));
+    if (next == side) return;
+    LBCSetFeedPosition(next);
     [self relayout];
 }
 - (void)relayout {
@@ -508,12 +519,14 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     NSString *selected = LBSelectedTabLabel(w);
     BOOL exploreSelected = selected ? [selected isEqualToString:@"Explore"] : (exploreView && !LBCWantsHidden(exploreView));
     BOOL wide = LBCPanelWanted(w);
-    BOOL panel = wide && LBCExploreEnabled() && exploreView && !exploreSelected;
-    LBCPanelStatus = !wide ? @"no room" : !LBCExploreEnabled() ? @"turned off" : !explore ? @"no Explore tab"
+    BOOL centre = wide && LBCFeedPosition() == 0;
+    BOOL panel = wide && LBCExploreEnabled() && exploreView && !exploreSelected && !centre;
+    LBCPanelStatus = !wide ? @"no room" : !LBCExploreEnabled() ? @"turned off" : centre ? @"feed in the centre"
+                   : !explore ? @"no Explore tab"
                    : !exploreView ? @"Explore not loaded" : exploreSelected ? @"Explore is the selected tab" : @"shown";
     // X makes a tab the first time it's shown. Switching to Explore on its behalf at launch broke Home's
     // first load (it never finished), so until it's been opened the panel's place says so instead.
-    LBCShowHint(view, wide && LBCExploreEnabled() && !exploreView && !exploreSelected);
+    LBCShowHint(view, wide && LBCExploreEnabled() && !exploreView && !exploreSelected && !centre);
     // X lays its tabs out with constraints, which undo frames set from here, so the feed narrows through
     // the safe area its screens already respect (as they do the sidebar's strip): the selected tab gets
     // the panel's width on the panel's side. Explore keeps its full frame but takes the feed's width on
@@ -525,8 +538,9 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         if (![c isKindOfClass:UINavigationController.class]) continue;
         BOOL isPanel = c == explore && panel;
         UIEdgeInsets extra = c.additionalSafeAreaInsets;
-        CGFloat left = !wide ? 0 : isPanel ? (right ? 0 : feed) : (right ? panelWidth : 0);
-        CGFloat rightInset = !wide ? 0 : isPanel ? (right ? feed : 0) : (right ? 0 : panelWidth);
+        CGFloat left = !wide ? 0 : isPanel ? (right ? 0 : feed) : centre ? round(panelWidth / 2) : (right ? panelWidth : 0);
+        CGFloat rightInset = !wide ? 0 : isPanel ? (right ? feed : 0) : centre ? panelWidth - round(panelWidth / 2)
+                           : (right ? 0 : panelWidth);
         if (fabs(extra.left - left) >= 0.5 || fabs(extra.right - rightInset) >= 0.5) {
             extra.left = left;
             extra.right = rightInset;

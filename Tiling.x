@@ -118,6 +118,8 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
+NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 centre, 1 right
+void LBCSetFeedPosition(NSInteger side);
 
 static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -203,20 +205,20 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
         LBCRelayout(weakSelf.window);
     }];
     panel.state = exploreOn ? UIMenuElementStateOn : UIMenuElementStateOff;
-    BOOL right = [defaults boolForKey:@"liquidbird_feed_right"];
-    UIAction *onLeft = [UIAction actionWithTitle:@"Feed on the left" image:[UIImage systemImageNamed:@"rectangle.lefthalf.filled"]
-                                      identifier:nil handler:^(UIAction *a) {
-        [defaults setBool:NO forKey:@"liquidbird_feed_right"];
-        LBCRelayout(weakSelf.window);
-    }];
-    onLeft.state = right ? UIMenuElementStateOff : UIMenuElementStateOn;
-    UIAction *onRight = [UIAction actionWithTitle:@"Feed on the right" image:[UIImage systemImageNamed:@"rectangle.righthalf.filled"]
-                                       identifier:nil handler:^(UIAction *a) {
-        [defaults setBool:YES forKey:@"liquidbird_feed_right"];
-        LBCRelayout(weakSelf.window);
-    }];
-    onRight.state = right ? UIMenuElementStateOn : UIMenuElementStateOff;
-    UIMenu *side = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[onLeft, onRight]];
+    NSInteger position = LBCFeedPosition();
+    NSArray *places = @[@[@"Feed on the left", @"rectangle.lefthalf.filled"], @[@"Feed in the center", @"rectangle.center.inset.filled"],
+                        @[@"Feed on the right", @"rectangle.righthalf.filled"]];
+    NSMutableArray<UIAction *> *sides = [NSMutableArray array];
+    for (NSInteger i = 0; i < 3; i++) {
+        UIAction *a = [UIAction actionWithTitle:places[i][0] image:[UIImage systemImageNamed:places[i][1]]
+                                     identifier:nil handler:^(UIAction *action) {
+            LBCSetFeedPosition(i - 1);
+            LBCRelayout(weakSelf.window);
+        }];
+        a.state = position == i - 1 ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [sides addObject:a];
+    }
+    UIMenu *side = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:sides];
     return @[menu, panel, side];
 }
 
