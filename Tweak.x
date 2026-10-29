@@ -105,6 +105,13 @@ static BOOL LBIsGrokString(NSString *s) {
 %end
 
 %ctor {
+    // X ships its own Liquid Glass redesign (TabBarPill, glass nav bar and buttons) behind the
+    // ios_liquid_glass_* feature switches; NeoFreeBird forces those on when its Labs toggle
+    // "Enable Liquid Glass" (NSUserDefaults key liquid_glass) is set. Default it on, once, so a
+    // later "off" in Labs sticks.
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    if (![d objectForKey:@"liquid_glass"]) [d setBool:YES forKey:@"liquid_glass"];
+
     %init;  // UIKit hooks, always present
     if (objc_getClass("T1TabBarView")) %init(TabBar);
     if (objc_getClass("TFNSpacesBarView")) %init(Spaces);
