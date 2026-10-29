@@ -8,7 +8,8 @@
 // and the newest slides in at the trailing edge, over the tab's root, which stays put underneath with
 // a sliver showing. The columns are one strip you slide sideways, snapping to column edges in the
 // direction you flick; a column's close button closes it and the ones after it, and tapping outside the
-// columns (the dimmed sliver of the tab) closes them all. Leaving the tab closes them; narrowing
+// columns (the dimmed sliver of the tab) or swiping them away (left past the end, or right past the start
+// when they're on the right) closes them all. Leaving the tab closes them; narrowing
 // (folding) puts them back on the tab's own stack, in order.
 //
 // Each column is a plain navigation controller of its own (LBColumnNavigationController: creating X's
@@ -265,9 +266,33 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     LBCPassThrough = NO;
 }
 
-// Snaps to column edges, in the direction flicked (Twitter for iPad's bestOffsetForPossibleOffsets:).
+// Throws every column off toward one side, then closes them.
+- (void)throwAwayToLeft:(BOOL)left {
+    NSArray<UIView *> *cards = [_cards copy];
+    CGFloat distance = (self.bounds.size.width + 40) * (left ? -1 : 1);
+    [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        for (UIView *card in cards) card.transform = CGAffineTransformMakeTranslation(distance, 0);
+        self->_dim.alpha = 0;
+    } completion:^(BOOL finished) {
+        [self closeAfter:-1 animated:NO];
+        self->_scroll.contentOffset = CGPointZero;
+    }];
+}
+
+// Snaps to column edges, in the direction flicked (Twitter for iPad's bestOffsetForPossibleOffsets:); pulled
+// on past the last column toward the left (or past the first toward the right, when the columns are on the
+// right), the columns are thrown away.
 - (void)scrollViewWillEndDragging:(UIScrollView *)scrollView withVelocity:(CGPoint)velocity
               targetContentOffset:(inout CGPoint *)target {
+    static const CGFloat throwDistance = 120;
+    CGFloat beyondEnd = scrollView.contentOffset.x - self.endOffset, beforeStart = -scrollView.contentOffset.x;
+    BOOL left = beyondEnd > throwDistance || (beyondEnd > 20 && velocity.x > 1);
+    BOOL right = !self.fromLeading && (beforeStart > throwDistance || (beforeStart > 20 && velocity.x < -1));
+    if (left || right) {
+        *target = scrollView.contentOffset;
+        dispatch_async(dispatch_get_main_queue(), ^{ [self throwAwayToLeft:left]; });
+        return;
+    }
     CGFloat w = self.columnWidth, x = scrollView.contentOffset.x;
     CGFloat stop = velocity.x > 0.2 ? ceil(x / w) * w : velocity.x < -0.2 ? floor(x / w) * w : round(x / w) * w;
     target->x = MIN(MAX(stop, 0), self.endOffset);
