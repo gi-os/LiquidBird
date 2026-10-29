@@ -6,8 +6,9 @@
 // doesn't push it: it becomes a column to the right of the one it came from (replacing any after it),
 // and the newest slides in at the trailing edge, over the tab's root, which stays put underneath with
 // a sliver showing. The columns are one strip you slide sideways, snapping to column edges in the
-// direction you flick; a column's close button closes it and the ones after it. Leaving the tab closes
-// them; narrowing (folding) puts them back on the tab's own stack, in order.
+// direction you flick; a column's close button closes it and the ones after it, and tapping outside the
+// columns (the dimmed sliver of the tab) closes them all. Leaving the tab closes them; narrowing
+// (folding) puts them back on the tab's own stack, in order.
 //
 // Each column is a plain navigation controller of its own (LBColumnNavigationController: creating X's
 // XNAVNavigationController outside its tabs crashed), in a container under the app's root beside the
@@ -57,6 +58,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 @end
 
 @implementation LBCStrip {
+    UIView *_dim;
     UIScrollView *_scroll;
     NSMutableArray<UIView *> *_cards;
     NSMutableArray<UINavigationController *> *_navigations;
@@ -65,6 +67,12 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
+        // Dims the tab under the columns; a tap on it closes them all.
+        _dim = [[UIView alloc] initWithFrame:self.bounds];
+        _dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+        _dim.alpha = 0;
+        [self addSubview:_dim];
+        [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(outsideTapped:)]];
         _scroll = [[UIScrollView alloc] initWithFrame:self.bounds];
         _scroll.delegate = self;
         _scroll.showsHorizontalScrollIndicator = NO;
@@ -86,14 +94,22 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 // Where the first column rests: past the root's sliver.
 - (CGFloat)firstColumnX { return self.bounds.size.width - self.columnWidth; }
 
-// The root's part of the strip is open, so touches there reach the tab underneath; a touch on a column
-// marks it as the one the next push comes from.
+// Outside the columns the strip takes the touch (a tap there closes them all); a touch on a column marks
+// it as the one the next push comes from.
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    if (!hit || hit == self || hit == _scroll) { _touched = nil; return nil; }
+    if (!hit) return nil;
+    if (hit == self || hit == _scroll || hit == _dim) { _touched = nil; return _cards.count ? self : nil; }
     for (UIView *card in _cards)
         if ([hit isDescendantOfView:card]) { _touched = card; break; }
     return hit;
+}
+
+- (void)outsideTapped:(UITapGestureRecognizer *)tap {
+    CGPoint p = [tap locationInView:self];
+    for (UIView *card in _cards)
+        if (CGRectContainsPoint([self convertRect:card.bounds fromView:card], p)) return;
+    [self closeAfter:-1 animated:YES];
 }
 
 - (UINavigationController *)touchedColumn {
@@ -124,6 +140,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    _dim.frame = self.bounds;
     _scroll.frame = self.bounds;
     CGFloat w = self.columnWidth, x = self.firstColumnX, h = self.bounds.size.height;
     for (NSUInteger i = 0; i < _cards.count; i++) {
@@ -181,9 +198,11 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
         [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:0 animations:^{
             card.transform = CGAffineTransformIdentity;
             self->_scroll.contentOffset = CGPointMake(end, 0);
+            self->_dim.alpha = 1;
         } completion:nil];
     } else {
         _scroll.contentOffset = CGPointMake(end, 0);
+        _dim.alpha = 1;
     }
 }
 
@@ -215,7 +234,10 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     [self setNeedsLayout];
     [self layoutIfNeeded];
     if (_scroll.contentOffset.x > self.endOffset) [_scroll setContentOffset:CGPointMake(self.endOffset, 0) animated:slide];
-    if (!_cards.count && !slide) self.hidden = YES;
+    if (!_cards.count) {
+        if (slide) [UIView animateWithDuration:0.3 animations:^{ self->_dim.alpha = 0; }];
+        else { _dim.alpha = 0; self.hidden = YES; }
+    }
 }
 
 // Folded, there's no room for columns: what they show goes back on the tab's stack, in order, with
