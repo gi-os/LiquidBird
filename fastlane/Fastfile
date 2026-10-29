@@ -11,6 +11,13 @@ platform :ios do
   lane :adhoc do
     api_key = app_store_connect_api_key(key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key_content: ENV["ASC_KEY_P8"], in_house: false)
 
+    # A new device (workflow input udid, from scripts/register_link.sh) is registered first, so the
+    # profile below is remade to include it.
+    unless ENV["REGISTER_UDID"].to_s.strip.empty?
+      register_device(name: ENV["REGISTER_NAME"].to_s.strip.empty? ? "iPhone" : ENV["REGISTER_NAME"].strip,
+                      udid: ENV["REGISTER_UDID"].strip, platform: "ios", api_key: api_key)
+    end
+
     devices = Spaceship::ConnectAPI::Device.all.select { |d| d.platform == "IOS" && d.status == "ENABLED" }
     UI.message("Registered devices: #{devices.empty? ? 'none' : devices.map { |d| "#{d.name} (#{d.device_class}, …#{d.udid.to_s[-4..]})" }.join(', ')}")
     UI.user_error!("No iPhone or iPad is registered in the developer account, so an ad-hoc build can't install anywhere. Register the device's UDID, then re-run.") if devices.empty?

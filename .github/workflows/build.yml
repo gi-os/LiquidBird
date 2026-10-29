@@ -6,6 +6,14 @@ on:
         description: Inject FLEXing for class discovery
         type: boolean
         default: false
+      udid:
+        description: Register this device UDID before signing (scripts/register_link.sh finds it)
+        type: string
+        default: ""
+      device_name:
+        description: Name for that device in the developer account
+        type: string
+        default: "Giovanni's iPhone"
   push:
     branches: [main]
 
@@ -70,6 +78,8 @@ jobs:
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_AUTH }}
+      REGISTER_UDID: ${{ inputs.udid }}
+      REGISTER_NAME: ${{ inputs.device_name }}
     steps:
       - uses: actions/checkout@v4
 
