@@ -9,9 +9,10 @@
 // direction you flick; a column's close button closes it and the ones after it. Leaving the tab closes
 // them; narrowing (folding) puts them back on the tab's own stack, in order.
 //
-// Each column is X's own navigation controller (XNAVNavigationController), a child of X's tab bar
-// controller, so its screens get X's bars and find X's navigation up their responder chain; a push
-// from inside a column opens the next column.
+// Each column is X's own navigation controller (XNAVNavigationController), so its screens get X's bars;
+// the columns are children of a plain container under the app's root (beside the sidebar), not of X's
+// tab bar controller, which expects only its own tabs. A push from inside a column opens the next
+// column. If opening a column throws, the push goes ahead as usual instead.
 
 @interface XNAVNavigationController : UINavigationController
 @end
@@ -21,7 +22,6 @@
 // gi-os/twitter's ColumnLayout: columns prefer 476pt, need 400, and leave at least a 160pt sliver of
 // what they came from.
 static const CGFloat LBCPreferred = 476, LBCMinimum = 400, LBCSliver = 160;
-static const void *kLBCStrip = &kLBCStrip;
 static const void *kLBCColumnOf = &kLBCColumnOf;
 static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns back onto the stack
 
@@ -47,7 +47,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 @interface LBCStrip : UIView <UIScrollViewDelegate>
 @property (nonatomic, weak) UINavigationController *rootNavigation;   // the tab's own stack
-@property (nonatomic, weak) UIViewController *parent;                 // X's tab bar controller
+@property (nonatomic, weak) UIViewController *parent;                 // the columns' container
 @property (nonatomic, readonly) NSUInteger count;
 - (void)open:(UIViewController *)vc after:(UINavigationController *)from animated:(BOOL)animated;
 - (void)closeAfter:(NSInteger)index animated:(BOOL)animated;          // -1: every column
@@ -244,21 +244,35 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 }
 @end
 
-// The strip over a tab bar controller's content, left of the sidebar.
-static LBCStrip *LBCStripFor(UIViewController *tabs, BOOL create) {
-    UIView *view = tabs.viewIfLoaded;
-    UIWindow *w = view.window;
-    if (!w) return nil;
-    LBCStrip *strip = objc_getAssociatedObject(tabs, kLBCStrip);
-    if (!strip && create) {
-        strip = [[LBCStrip alloc] initWithFrame:CGRectZero];
-        strip.parent = tabs;
-        objc_setAssociatedObject(tabs, kLBCStrip, strip, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+static const void *kLBCContainer = &kLBCContainer;
+
+// The strip over the content, left of the sidebar: under the app's root view controller, in a plain
+// container that holds the columns' navigation controllers. One per window.
+static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
+    UIViewController *root = w.rootViewController;
+    UIView *host = root.viewIfLoaded;
+    if (!host) return nil;
+    UIViewController *container = objc_getAssociatedObject(w, kLBCContainer);
+    if (!container && create) {
+        container = [UIViewController new];
+        LBCStrip *strip = [[LBCStrip alloc] initWithFrame:CGRectZero];
+        container.view = strip;
+        strip.parent = container;
+        [root addChildViewController:container];
+        [host addSubview:strip];
+        [container didMoveToParentViewController:root];
+        objc_setAssociatedObject(w, kLBCContainer, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    LBCStrip *strip = (LBCStrip *)container.viewIfLoaded;
     if (!strip) return nil;
-    if (strip.superview != view) [view addSubview:strip];
-    [view bringSubviewToFront:strip];
-    CGRect frame = [view convertRect:CGRectMake(0, 0, LBCAvailable(w), w.bounds.size.height) fromView:nil];
+    // Above the content, under the sidebar.
+    UIView *sidebar = nil;
+    Class sidebarClass = objc_getClass("LBSidebar");
+    for (UIView *v in host.subviews) if (sidebarClass && [v isKindOfClass:sidebarClass]) sidebar = v;
+    if (strip.superview != host) [host addSubview:strip];
+    if (sidebar) [host insertSubview:strip belowSubview:sidebar];
+    else [host bringSubviewToFront:strip];
+    CGRect frame = [host convertRect:CGRectMake(0, 0, LBCAvailable(w), w.bounds.size.height) fromView:nil];
     if (!CGRectEqualToRect(strip.frame, frame)) strip.frame = frame;
     return strip;
 }
@@ -289,22 +303,32 @@ static void LBCKeepBelowBar(UINavigationController *nav) {
 - (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
     if (LBCPassThrough || !vc || self.viewControllers.count == 0) { %orig; return; }
     UIWindow *w = self.viewIfLoaded.window;
-    // Pushed from inside a column: the next column.
+    if (!LBCColumnsWanted(w)) { %orig; return; }
     LBCStrip *owner = objc_getAssociatedObject(self, kLBCColumnOf);
-    if (owner) {
-        if (LBCColumnsWanted(w)) [owner open:vc after:self animated:animated];
-        else %orig;
-        return;
-    }
-    // Pushed on a tab's own stack (not in a sheet): a column after the one last touched, or the root.
+    // Pushed on a tab's own stack (not in a sheet), or from inside a column.
     UIViewController *tabs = self.parentViewController;
-    if (!LBCColumnsWanted(w) || self.presentingViewController ||
-        ![tabs isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")]) { %orig; return; }
-    LBCStrip *strip = LBCStripFor(tabs, YES);
+    BOOL tabStack = !owner && !self.presentingViewController &&
+                    [tabs isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")];
+    if (!owner && !tabStack) { %orig; return; }
+    LBCStrip *strip = owner ?: LBCStripFor(w, YES);
     if (!strip) { %orig; return; }
-    if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
-    strip.rootNavigation = self;
-    [strip open:vc after:strip.touchedColumn animated:animated];
+    @try {
+        if (owner) {
+            [strip open:vc after:self animated:animated];
+        } else {
+            if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
+            strip.rootNavigation = self;
+            // After the column last touched, or from the root (the sliver), replacing every column.
+            [strip open:vc after:strip.touchedColumn animated:animated];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"LiquidBird: couldn't open a column (%@), pushing instead", e);
+        @try { [strip closeAfter:-1 animated:NO]; } @catch (NSException *ignored) {}
+        if (vc.parentViewController) [vc removeFromParentViewController];
+        LBCPassThrough = YES;
+        [self pushViewController:vc animated:animated];
+        LBCPassThrough = NO;
+    }
 }
 %end
 
@@ -313,7 +337,7 @@ static void LBCKeepBelowBar(UINavigationController *nav) {
 // folding puts them back on its stack.
 - (void)viewDidLayoutSubviews {
     %orig;
-    LBCStrip *strip = LBCStripFor(self, NO);
+    LBCStrip *strip = LBCStripFor(self.viewIfLoaded.window, NO);
     if (!strip.count) return;
     UINavigationController *root = strip.rootNavigation;
     if (!LBCColumnsWanted(self.viewIfLoaded.window)) [strip foldBackOntoStack];
