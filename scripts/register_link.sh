@@ -11,7 +11,10 @@ cleanup() { kill ${PIDS[@]+"${PIDS[@]}"} 2>/dev/null || true; rm -rf "$DIR"; }
 trap cleanup EXIT
 
 PORT="$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" >"$DIR/tunnel.log" 2>&1 & PIDS+=($!)
+# Its own empty config: ~/.cloudflared/config.yml (the named BlueBubbles tunnel) ends in a catch-all
+# 404 rule that would otherwise apply to this quick tunnel too.
+echo "no-autoupdate: true" >"$DIR/cloudflared.yml"
+cloudflared tunnel --config "$DIR/cloudflared.yml" --url "http://127.0.0.1:$PORT" >"$DIR/tunnel.log" 2>&1 & PIDS+=($!)
 HOST=""
 for _ in $(seq 60); do
   HOST="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$DIR/tunnel.log" | head -1 || true)"
@@ -20,7 +23,8 @@ done
 [[ -n "$HOST" ]] || { echo "cloudflared didn't start a tunnel:" >&2; tail -20 "$DIR/tunnel.log" >&2; exit 1; }
 BASE="$HOST/$TOKEN"
 
-python3 -I - "$PORT" "$TOKEN" "$BASE" "$DIR/udid" "$(uuidgen)" >"$DIR/http.log" 2>&1 <<'PY' & PIDS+=($!)
+# Written to a file first: macOS's bash 3.2 loses a here-document fed to a background command.
+cat >"$DIR/server.py" <<'PY'
 import http.server, re, sys
 port, token, base, out, uuid = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 PAGE = f"""<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -68,6 +72,8 @@ class H(http.server.BaseHTTPRequestHandler):
 
 http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
+UUID="$(uuidgen)"
+python3 -I "$DIR/server.py" "$PORT" "$TOKEN" "$BASE" "$DIR/udid" "$UUID" >"$DIR/http.log" 2>&1 & PIDS+=($!)
 
 for _ in $(seq 30); do curl -fsS -o /dev/null "$BASE/" 2>/dev/null && break; sleep 2; done
 echo "Registration link, open on the device in Safari: $BASE/"

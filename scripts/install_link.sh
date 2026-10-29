@@ -22,7 +22,10 @@ VERSION="$(unzip -p "$IPA" 'Payload/*.app/Info.plist' | plutil -extract CFBundle
 
 PORT="$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 python3 -I -m http.server "$PORT" --bind 127.0.0.1 --directory "$DIR/www" >"$DIR/http.log" 2>&1 & PIDS+=($!)
-cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" >"$DIR/tunnel.log" 2>&1 & PIDS+=($!)
+# Its own empty config: ~/.cloudflared/config.yml (the named BlueBubbles tunnel) ends in a catch-all
+# 404 rule that would otherwise apply to this quick tunnel too.
+echo "no-autoupdate: true" >"$DIR/cloudflared.yml"
+cloudflared tunnel --config "$DIR/cloudflared.yml" --url "http://127.0.0.1:$PORT" >"$DIR/tunnel.log" 2>&1 & PIDS+=($!)
 HOST=""
 for _ in $(seq 60); do
   HOST="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$DIR/tunnel.log" | head -1 || true)"
