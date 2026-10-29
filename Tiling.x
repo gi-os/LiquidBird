@@ -37,6 +37,8 @@
 @end
 @interface _TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar : UINavigationBar
 @end
+@interface _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController : UIViewController
+@end
 
 static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
 static const CGFloat LBMinimumColumnWidth = 400;
@@ -529,8 +531,11 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
 // the slide-over menu the avatar did. X's navigation ignores setNavigationBarHidden: and the screen's
 // tfn_prefersNavigationBarHidden, and places its Bar itself (overriding frame and center), so on Home
-// the bar is faded out. (Moving the timelines row up into its place is still to come.) Screens pushed
-// over Home keep it, for the back button.
+// the bar is faded out. The row of timelines under it (AccessoryStackView) and the timeline's insets
+// are laid out from X's own idea of the bar, so Home's whole view moves up by the band the bar leaves
+// (where X puts that row, less a small margin) and grows by as much at the bottom: the row comes to the
+// top and the first tweet stays right under it. Screens pushed over Home keep their bar, for the back
+// button.
 static BOOL LBHidesBar(UINavigationController *nav) {
     Class home = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
     return home && [nav.topViewController isKindOfClass:home] && LBSidebarWanted(nav.viewIfLoaded.window);
@@ -544,7 +549,37 @@ static BOOL LBBarOnHome(UINavigationBar *bar) {
     return nav && LBHidesBar(nav);
 }
 
+static const void *kLBHomeShift = &kLBHomeShift;
+
+static void LBShiftHome(UIViewController *home) {
+    UIView *view = home.viewIfLoaded, *container = view.superview;
+    if (!view || !container) return;
+    CGFloat shift = [objc_getAssociatedObject(home, kLBHomeShift) doubleValue];
+    // Where X puts the row of timelines with its bar shown; collapsed on scroll it's higher, so the
+    // furthest down seen is the one to use.
+    Class row = objc_getClass("_TtC11XNavigation18AccessoryStackView");
+    for (UIView *v in view.subviews) {
+        if (!row || ![v isKindOfClass:row]) continue;
+        CGFloat y = v.frame.origin.y - 6;
+        if (y > shift && y < 200) {
+            shift = y;
+            objc_setAssociatedObject(home, kLBHomeShift, @(shift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+    CGRect bounds = container.bounds;
+    CGRect frame = LBHidesBar(home.navigationController)
+        ? CGRectMake(0, -shift, bounds.size.width, bounds.size.height + shift) : bounds;
+    if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
+}
+
 %group HomeBar
+%hook _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController
+- (void)viewDidLayoutSubviews {
+    %orig;
+    LBShiftHome(self);
+}
+%end
+
 %hook _TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar
 - (void)setAlpha:(CGFloat)alpha {
     objc_setAssociatedObject(self, kLBWantedAlpha, @(alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -683,7 +718,8 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
     if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
-    if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar")) %init(HomeBar);
+    if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
+        objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }

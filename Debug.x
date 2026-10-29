@@ -27,7 +27,9 @@ static void LBDumpView(UIView *v, NSInteger depth, NSMutableString *out, NSInteg
     if (([v isKindOfClass:UIControl.class] || v.isAccessibilityElement) && v.accessibilityLabel.length)
         [out appendFormat:@" label=%@", [v.accessibilityLabel substringToIndex:MIN(v.accessibilityLabel.length, (NSUInteger)40)]];
     [out appendString:@"\n"];
-    if (depth >= 45 || [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class]) return;
+    // Cells are listed without their contents (tweets), except X's paging cells, which hold whole timelines.
+    BOOL cell = [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class];
+    if (depth >= 45 || (cell && [NSStringFromClass(v.class) rangeOfString:@"PagingCell"].location == NSNotFound)) return;
     for (UIView *s in v.subviews) LBDumpView(s, depth + 1, out, lines);
 }
 
