@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+extern NSString *LBCPanelStatus;   // Columns.x
+
 // A layout dump for working on LiquidBird without FLEX: press and hold anywhere with three fingers and
 // the window's view and view controller hierarchies are copied to the pasteboard, for Giovanni to paste
 // to Claude. Class names, frames, hidden/alpha, accessibility identifiers and control labels only; cells
@@ -71,7 +73,8 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
     [out appendFormat:@"window %@ safeArea %@ sizeClass h%ld v%ld\n", NSStringFromCGRect(w.bounds),
                       NSStringFromUIEdgeInsets(w.safeAreaInsets), (long)w.traitCollection.horizontalSizeClass,
                       (long)w.traitCollection.verticalSizeClass];
-    [out appendFormat:@"statusBar %@\n\n", NSStringFromCGRect(scene.statusBarManager.statusBarFrame)];
+    [out appendFormat:@"statusBar %@\n", NSStringFromCGRect(scene.statusBarManager.statusBarFrame)];
+    [out appendFormat:@"Explore panel: %@\n\n", LBCPanelStatus];
     [out appendString:@"== view controllers\n"];
     if (w.rootViewController) LBDumpViewController(w.rootViewController, 0, out);
     [out appendString:@"\n== views\n"];

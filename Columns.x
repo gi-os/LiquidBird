@@ -16,9 +16,10 @@
 // sidebar, not in X's tab bar controller, which expects only its own tabs. A push from inside a column
 // opens the next column. If opening a column throws, the push goes ahead as usual instead.
 //
-// With room for both (the Duo unfolded), the tab's feed narrows and X's own trends page stands beside it
-// as a column that stays, like X desktop's right sidebar; what opens from it opens as columns, which
-// slide over it.
+// With room for both (the Duo unfolded), the tab's feed narrows and X's own Explore tab (search, its
+// For you / Trending / News pages, trends) stands beside it, like X desktop's right sidebar: X keeps
+// Explore loaded and hidden behind the selected tab, so it's shown in that place rather than made
+// again. What opens from it opens as columns, which slide over it.
 
 @interface XNAVNavigationController : UINavigationController
 @end
@@ -321,89 +322,60 @@ static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
     return strip;
 }
 
-// MARK: - Trends beside the feed
+// MARK: - Explore beside the feed
 
-static const CGFloat LBCWide = 600, LBCTrendsMinimum = 240, LBCTrendsMaximum = 380;
-static const void *kLBCTrends = &kLBCTrends;
-static BOOL LBCTrendsChecked, LBCTrendsFailed;   // this launch
+static const CGFloat LBCWide = 600, LBCPanelMinimum = 240, LBCPanelMaximum = 380;
+static const void *kLBCWantsHidden = &kLBCWantsHidden;
+static const void *kLBCPanel = &kLBCPanel;
+NSString *LBCPanelStatus = @"not laid out yet";   // for the layout copy (Debug.x)
 
-static BOOL LBCTrendsWanted(UIWindow *w) {
-    return LBCAvailable(w) >= LBCWide && ![NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_trends_crashed"];
-}
-static CGFloat LBCTrendsWidth(UIWindow *w) {
-    return round(MIN(LBCTrendsMaximum, MAX(LBCTrendsMinimum, LBCAvailable(w) * 0.4)));
-}
-
-static id LBCMsg(id target, NSString *selector) {
-    SEL sel = NSSelectorFromString(selector);
-    return [target respondsToSelector:sel] ? ((id (*)(id, SEL))objc_msgSend)(target, sel) : nil;
+static BOOL LBCPanelWanted(UIWindow *w) { return LBCAvailable(w) >= LBCWide; }
+static CGFloat LBCPanelWidth(UIWindow *w) {
+    return round(MIN(LBCPanelMaximum, MAX(LBCPanelMinimum, LBCAvailable(w) * 0.4)));
 }
 
-// X's trends page, as its Explore makes it: from the account and its feature switches.
-static UIViewController *LBCMakeTrends(void) {
-    Class trendsClass = objc_getClass("T1TrendsLandingViewController"), featuresClass = objc_getClass("T1ExploreFeatures");
-    id account = LBCMsg(LBCMsg(objc_getClass("T1HostViewController"), @"sharedHostViewController"), @"currentAccount");
-    id switches = LBCMsg(account, @"featureSwitches");
-    SEL initFeatures = NSSelectorFromString(@"initWithFeatureSwitches:");
-    SEL initTrends = NSSelectorFromString(@"initWithFeatures:account:scribeContext:");
-    if (!trendsClass || !featuresClass || !account || !switches ||
-        ![featuresClass instancesRespondToSelector:initFeatures] || ![trendsClass instancesRespondToSelector:initTrends]) return nil;
-    id features = ((id (*)(id, SEL, id))objc_msgSend)([featuresClass alloc], initFeatures, switches);
-    return ((id (*)(id, SEL, id, id, id))objc_msgSend)([trendsClass alloc], initTrends, features, account, nil);
+// X hides the tabs it isn't showing; what it asks for is kept, and Explore stays shown while it's the
+// panel.
+static BOOL LBCWantsHidden(UIView *v) { return [objc_getAssociatedObject(v, kLBCWantsHidden) boolValue]; }
+
+static UINavigationController *LBCExploreTab(UIViewController *tabs) {
+    Class guide = objc_getClass("_TtC14T1TwitterSwift28GuideContainerViewController");
+    for (UIViewController *c in tabs.childViewControllers)
+        if ([c isKindOfClass:UINavigationController.class] &&
+            [((UINavigationController *)c).viewControllers.firstObject isKindOfClass:guide]) return (UINavigationController *)c;
+    return nil;
 }
 
-// Puts the trends column beside the feed (or takes it away), under the strip. If making it ever
-// crashes the app (the flag set while it opens outlives the launch), it isn't tried again.
-static LBColumnNavigationController *LBCUpdateTrends(UIWindow *w) {
-    LBColumnNavigationController *trends = objc_getAssociatedObject(w, kLBCTrends);
-    UIView *host = w.rootViewController.viewIfLoaded;
-    if (!host || !LBCTrendsWanted(w)) {
-        if (trends) {
-            [trends willMoveToParentViewController:nil];
-            [trends.view removeFromSuperview];
-            [trends removeFromParentViewController];
-            objc_setAssociatedObject(w, kLBCTrends, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-        return nil;
+// Lays the tabs out: Explore as the panel on the right and the selected tab narrowed beside it, or both
+// as X has them.
+static void LBCLayoutPanel(UIViewController *tabs) {
+    UIView *view = tabs.viewIfLoaded;
+    UIWindow *w = view.window;
+    if (!w) return;
+    UINavigationController *explore = LBCExploreTab(tabs);
+    UIView *exploreView = explore.viewIfLoaded;
+    BOOL exploreSelected = exploreView && !LBCWantsHidden(exploreView);
+    BOOL panel = LBCPanelWanted(w) && exploreView && !exploreSelected;
+    LBCPanelStatus = !LBCPanelWanted(w) ? @"no room" : !explore ? @"no Explore tab" : !exploreView ? @"Explore not loaded"
+                   : exploreSelected ? @"Explore is the selected tab" : @"shown";
+    if (exploreView) {
+        objc_setAssociatedObject(exploreView, kLBCPanel, @(panel), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below
     }
-    LBCStrip *strip = LBCStripFor(w, YES);
-    UIViewController *container = objc_getAssociatedObject(w, kLBCContainer);
-    if (!strip || !container) return nil;
-    if (!trends) {
-        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-        if (!LBCTrendsChecked) {
-            LBCTrendsChecked = YES;
-            if ([defaults boolForKey:@"liquidbird_trends_opening"]) {
-                [defaults setBool:YES forKey:@"liquidbird_trends_crashed"];
-                [defaults removeObjectForKey:@"liquidbird_trends_opening"];
-                return nil;
-            }
+    CGFloat width = view.bounds.size.width;
+    CGFloat feed = panel ? [view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCPanelWidth(w), 1) fromView:nil].size.width : width;
+    for (UIViewController *c in tabs.childViewControllers) {
+        UIView *v = c.viewIfLoaded;
+        if (!v || ![c isKindOfClass:UINavigationController.class]) continue;
+        CGRect f = v.frame;
+        if (c == explore && panel) {
+            f = CGRectMake(feed, 0, [view convertRect:CGRectMake(0, 0, LBCPanelWidth(w), 1) fromView:nil].size.width, view.bounds.size.height);
+        } else {
+            f.origin.x = 0;
+            f.size.width = feed;
         }
-        if (LBCTrendsFailed) return nil;
-        [defaults setBool:YES forKey:@"liquidbird_trends_opening"];
-        UIViewController *page = nil;
-        @try { page = LBCMakeTrends(); } @catch (NSException *e) { page = nil; }
-        if (!page) {
-            LBCTrendsFailed = YES;
-            [defaults removeObjectForKey:@"liquidbird_trends_opening"];
-            return nil;
-        }
-        trends = [[LBColumnNavigationController alloc] initWithRootViewController:page];
-        trends.strip = strip;
-        trends.view.accessibilityIdentifier = @"LBColumn";
-        [container addChildViewController:trends];
-        [host insertSubview:trends.view belowSubview:strip];
-        [trends didMoveToParentViewController:container];
-        objc_setAssociatedObject(w, kLBCTrends, trends, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [defaults removeObjectForKey:@"liquidbird_trends_opening"];
-        });
+        if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
     }
-    CGFloat width = LBCTrendsWidth(w);
-    CGRect frame = [host convertRect:CGRectMake(LBCAvailable(w) - width, 0, width, w.bounds.size.height) fromView:nil];
-    if (!CGRectEqualToRect(trends.view.frame, frame)) trends.view.frame = frame;
-    if (trends.view.superview != host) [host insertSubview:trends.view belowSubview:strip];
-    return trends;
 }
 
 %group Columns
@@ -436,25 +408,22 @@ static LBColumnNavigationController *LBCUpdateTrends(UIWindow *w) {
 }
 %end
 
+%hook UILayoutContainerView
+// A navigation controller's view; X hides the tabs it isn't showing this way. Explore stays shown while
+// it's the panel beside the feed.
+- (void)setHidden:(BOOL)hidden {
+    objc_setAssociatedObject(self, kLBCWantsHidden, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(hidden && ![objc_getAssociatedObject(self, kLBCPanel) boolValue]);
+}
+%end
+
 %hook _TtC11XNavigation16TabBarController
 // Keeps the strip over the content as the window changes; leaving the tab closes its columns, and
 // folding puts them back on its stack.
 - (void)viewDidLayoutSubviews {
     %orig;
     UIWindow *w = self.viewIfLoaded.window;
-    // With the trends column beside it, the tab's feed narrows to the rest of the room.
-    LBColumnNavigationController *trends = w ? LBCUpdateTrends(w) : nil;
-    CGFloat feed = trends ? [self.view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCTrendsWidth(w), 1) fromView:nil].size.width
-                          : self.view.bounds.size.width;
-    Class xnav = objc_getClass("XNAVNavigationController");
-    for (UIViewController *c in self.childViewControllers) {
-        UIView *v = c.viewIfLoaded;
-        if (!v.window || ![c isKindOfClass:xnav]) continue;
-        CGRect f = v.frame;
-        if (fabs(f.size.width - feed) < 0.5) continue;
-        f.size.width = feed;
-        v.frame = f;
-    }
+    LBCLayoutPanel(self);
     LBCStrip *strip = LBCStripFor(w, NO);
     if (!strip.count) return;
     UINavigationController *root = strip.rootNavigation;
