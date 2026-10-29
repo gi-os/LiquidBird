@@ -118,7 +118,7 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
-NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 centre, 1 right
+NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 full width, 1 right
 void LBCSetFeedPosition(NSInteger side);
 
 static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
@@ -206,7 +206,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     }];
     panel.state = exploreOn ? UIMenuElementStateOn : UIMenuElementStateOff;
     NSInteger position = LBCFeedPosition();
-    NSArray *places = @[@[@"Feed on the left", @"rectangle.lefthalf.filled"], @[@"Feed in the center", @"rectangle.center.inset.filled"],
+    NSArray *places = @[@[@"Feed on the left", @"rectangle.lefthalf.filled"], @[@"Feed full width", @"rectangle.inset.filled"],
                         @[@"Feed on the right", @"rectangle.righthalf.filled"]];
     NSMutableArray<UIAction *> *sides = [NSMutableArray array];
     for (NSInteger i = 0; i < 3; i++) {
