@@ -116,6 +116,7 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 // MARK: - The sidebar
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
+CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
 
 static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -580,6 +581,24 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 %end
 %end
 
+// The whole layer X floats its tab bar chrome in. Its + sits in a glass container, which draws it whatever
+// the button's own alpha (unfolded it stayed on screen), so the layer above the container fades too.
+%group TabBarChrome
+%hook _TtC11XNavigation25TabBarChromeContainerView
+- (void)didMoveToWindow {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
+- (void)layoutSubviews {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(LBBarAlpha(self, alpha));
+}
+%end
+%end
+
 %group GlassAccessory
 %hook _TtC11XNavigation25TabBarAccessoryButtonView
 // Faded as soon as it's on screen (unfolded, the + was laid out before it had a window).
@@ -665,6 +684,7 @@ static void LBShiftHome(UIViewController *home) {
     CGRect bounds = container.bounds;
     CGRect frame = hide ? CGRectMake(view.frame.origin.x, -shift, bounds.size.width, bounds.size.height + shift)
                         : CGRectMake(view.frame.origin.x, 0, bounds.size.width, bounds.size.height);
+    frame = LBCFitScreen(home, frame);   // unfolded, narrowed to the feed's side
     if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
 
     // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
@@ -914,6 +934,7 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
     if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
+    if (objc_getClass("_TtC11XNavigation25TabBarChromeContainerView")) %init(TabBarChrome);
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);

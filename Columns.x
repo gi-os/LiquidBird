@@ -54,7 +54,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     return nav;
 }
 
-@interface LBCStrip : UIView <UIScrollViewDelegate>
+@interface LBCStrip : UIView <UIScrollViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UINavigationController *rootNavigation;   // the tab's own stack
 @property (nonatomic) BOOL fromLeading;   // with the feed on the right, columns open over the left side
 @property (nonatomic, weak) UIViewController *parent;                 // the columns' container
@@ -80,7 +80,9 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
         _dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
         _dim.alpha = 0;
         [self addSubview:_dim];
-        [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(outsideTapped:)]];
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(outsideTapped:)];
+        tap.delegate = self;
+        [self addGestureRecognizer:tap];
         _scroll = [[UIScrollView alloc] initWithFrame:self.bounds];
         _scroll.delegate = self;
         _scroll.showsHorizontalScrollIndicator = NO;
@@ -114,10 +116,25 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 }
 
 - (void)outsideTapped:(UITapGestureRecognizer *)tap {
-    CGPoint p = [tap locationInView:self];
+    [self closeIfOutside:[tap locationInView:self]];
+}
+
+- (void)closeIfOutside:(CGPoint)p {
     for (UIView *card in _cards)
         if (CGRectContainsPoint([self convertRect:card.bounds fromView:card], p)) return;
     [self closeAfter:-1 animated:YES];
+}
+
+// The tap counts even if one of X's own gestures recognizes it too; and should one claim it outright, the
+// touch ending here still closes them.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    UITouch *touch = touches.anyObject;
+    if (touch.view == self && touch.tapCount > 0) [self closeIfOutside:[touch locationInView:self]];
 }
 
 - (UINavigationController *)touchedColumn {
@@ -532,8 +549,26 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below
     }
     if (explore.isViewLoaded) LBCTrimExploreBar(explore, panel);
+    if (wide) view.backgroundColor = UIColor.blackColor;   // beside the feed, with no Explore there
     LBCStripFor(w, NO).fromLeading = right;
     LBCInstallSwipe(w, tabs);
+}
+
+// The bars keep to that safe area, but X's lists don't: the timelines and Explore's pages sit in paging
+// cells, which cut a safe area's sides off, and stayed full width under it. So a tab's screen is placed in
+// its side outright; the navigation sets its screens' frames, not constraints, so that stays. Left alone
+// mid-transition (the slide back folded), and for screens not on a tab's stack.
+CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
+    UINavigationController *nav = vc.navigationController;
+    UIView *container = vc.viewIfLoaded.superview;
+    if (!container || nav.topViewController != vc || nav.transitionCoordinator) return frame;
+    if (![nav.parentViewController isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")]) return frame;
+    UIEdgeInsets extra = nav.additionalSafeAreaInsets, safe = nav.view.safeAreaInsets;
+    CGFloat width = container.bounds.size.width;
+    BOOL narrowed = extra.left >= 0.5 || extra.right >= 0.5;
+    frame.origin.x = narrowed ? safe.left : 0;
+    frame.size.width = narrowed ? MAX(0, width - safe.left - safe.right) : width;
+    return frame;
 }
 
 %group Columns
@@ -563,6 +598,13 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         [self pushViewController:vc animated:animated];
         LBCPassThrough = NO;
     }
+}
+- (void)viewDidLayoutSubviews {
+    %orig;
+    UIView *screen = self.topViewController.viewIfLoaded;
+    if (!screen) return;
+    CGRect frame = LBCFitScreen(self.topViewController, screen.frame);
+    if (!CGRectEqualToRect(screen.frame, frame)) screen.frame = frame;
 }
 %end
 
