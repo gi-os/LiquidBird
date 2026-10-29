@@ -122,6 +122,9 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 @interface LBSidebar : UIView
 @property (nonatomic) CGFloat top;       // under the status bar
+// How far the column's centre line sits from the strip's: iPhone Duo's side status bar is centred a
+// little in from the display's rounded corner (gi-os/twitter's ClassicSidebar centerOffset, -5).
+@property (nonatomic) CGFloat centreOffset;
 @property (nonatomic, copy) void (^logoAction)(void);
 @property (nonatomic, copy) void (^composeAction)(void);
 @property (nonatomic, copy) void (^settingsAction)(void);
@@ -207,46 +210,52 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     [self setNeedsLayout];
 }
 
-// The logo and the rail from the top, under the status bar; compose and the gear from the bottom. A
-// short pose (the Duo unfolded is about 470pt tall) drops the gear (the logo's long-press has it) and
-// shrinks the rows.
+// One column, packed from the bottom up: the gear, compose, the tab rail, and the logo on top. Packing
+// from the bottom leaves the most room under the status bar, which grows with what it shows (Focus,
+// Live Activities). A short pose (the Duo unfolded is about 470pt tall) drops the gear (the logo's
+// long-press has it), tightens the gaps and shrinks the rows to stay under the status bar.
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat mid = self.bounds.size.width / 2;
+    CGFloat mid = round(self.bounds.size.width / 2 + self.centreOffset);
     CGFloat bottom = self.bounds.size.height - MAX(self.safeAreaInsets.bottom, 16);
     CGFloat room = bottom - self.top;
-    BOOL tight = room < 420;
-    CGFloat pad = 4, gap = tight ? 10 : 14, logo = tight ? 34 : 40, compose = tight ? 48 : LBGlassWidth, gear = 40;
+    NSUInteger n = _buttons.count;
+    CGFloat pad = 4;
+    CGFloat full = 40 + 14 + (n * LBRow + 2 * pad) + 14 + LBGlassWidth + 14 + 40;
+    BOOL tight = full > room;
+    CGFloat gap = tight ? 10 : 14, logo = tight ? 34 : 40, compose = tight ? 48 : LBGlassWidth, gear = 40;
+    CGFloat fixed = logo + gap + 2 * pad + gap + compose + (tight ? 0 : gap + gear);
+    CGFloat row = n ? MAX(34, MIN(LBRow, floor((room - fixed) / n))) : LBRow;
 
-    _settingsGlass.hidden = tight;
     CGFloat y = bottom;
+    _settingsGlass.hidden = tight;
     if (!tight) {
         y -= gear;
-        _settingsGlass.frame = CGRectMake(round(mid - gear / 2), y, gear, gear);
+        _settingsGlass.frame = CGRectMake(mid - gear / 2, y, gear, gear);
         _settingsGlass.layer.cornerRadius = gear / 2;
         _settings.frame = _settingsGlass.contentView.bounds;
         y -= gap;
     }
     y -= compose;
-    _composeGlass.frame = CGRectMake(round(mid - compose / 2), y, compose, compose);
+    _composeGlass.frame = CGRectMake(mid - compose / 2, y, compose, compose);
     _composeGlass.layer.cornerRadius = compose / 2;
     _compose.frame = _composeGlass.contentView.bounds;
-    CGFloat railBottom = y - gap;
+    y -= gap;
 
-    _logoGlass.frame = CGRectMake(round(mid - logo / 2), self.top, logo, logo);
-    _logoGlass.layer.cornerRadius = logo / 2;
-    _logo.frame = CGRectInset(_logoGlass.contentView.bounds, logo * 0.2, logo * 0.2);
-    CGFloat railTop = self.top + logo + gap;
-
-    CGFloat row = _buttons.count ? MAX(34, MIN(LBRow, floor((railBottom - railTop - 2 * pad) / _buttons.count))) : LBRow;
-    _rail.hidden = _buttons.count == 0;
-    _rail.frame = CGRectMake(round(mid - LBGlassWidth / 2), railTop, LBGlassWidth, _buttons.count * row + 2 * pad);
+    CGFloat rail = n * row + 2 * pad;
+    y -= rail;
+    _rail.hidden = n == 0;
+    _rail.frame = CGRectMake(mid - LBGlassWidth / 2, y, LBGlassWidth, rail);
     _rail.layer.cornerRadius = LBGlassWidth / 2;
-    for (NSUInteger i = 0; i < _buttons.count; i++) {
+    for (NSUInteger i = 0; i < n; i++) {
         UIButton *b = _buttons[i];
         b.frame = CGRectMake(pad, pad + i * row, LBGlassWidth - 2 * pad, row);
         b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
     }
+    y -= gap + logo;
+    _logoGlass.frame = CGRectMake(mid - logo / 2, y, logo, logo);
+    _logoGlass.layer.cornerRadius = logo / 2;
+    _logo.frame = CGRectInset(_logoGlass.contentView.bounds, logo * 0.2, logo * 0.2);
 }
 @end
 
@@ -388,6 +397,7 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
     [host bringSubviewToFront:bar];
     bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
     bar.top = LBStatusBottom(host);
+    bar.centreOffset = host.safeAreaInsets.top < 1 ? -5 : 0;
     [bar setLogo:LBTwitterLogo(w)];
     [bar setTabs:shown selected:shownSelected activate:^(NSInteger i) {
         if (i < (NSInteger)index.count) activate(index[i].integerValue);
@@ -537,8 +547,15 @@ static BOOL LBHidesBar(UINavigationController *nav) {
 %end
 
 %hook _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController
+// X's navigation asks the top screen whether its bar should show (TFN's tfn_prefersNavigationBarHidden)
+// rather than taking setNavigationBarHidden: from outside.
+- (BOOL)tfn_prefersNavigationBarHidden {
+    return LBSidebarWanted(self.viewIfLoaded.window ?: self.navigationController.viewIfLoaded.window) ? YES : %orig;
+}
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    SEL update = NSSelectorFromString(@"tfn_setNeedsNavigationBarHiddenUpdate");
+    if ([self respondsToSelector:update]) ((void (*)(id, SEL))objc_msgSend)(self, update);
     UINavigationController *nav = self.navigationController;
     if (LBHidesBar(nav) && !nav.navigationBarHidden) [nav setNavigationBarHidden:YES animated:NO];
 }
