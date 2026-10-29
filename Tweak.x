@@ -10,6 +10,7 @@
 @interface _TtC7XSports22SportsGameCarouselView : UIView @end
 @interface T1LiveBroadcastCell : UIView @end
 @interface TFSFeatureSwitches : NSObject @end
+@interface T1ImmersiveFullScreenViewController : UIViewController @end
 @interface TFSInstrumentedFeatureSwitches : NSObject @end
 
 // ---------- helpers ----------
@@ -99,6 +100,17 @@ static BOOL LBSwitchOff(NSString *key) {
 %end
 %end
 
+// ---------- Photos ----------
+
+// The full-screen media viewer keeps the status bar hidden throughout, chrome shown or not; it
+// takes the status bar over from whatever presented it.
+%group Photos
+%hook T1ImmersiveFullScreenViewController
+- (BOOL)prefersStatusBarHidden { return YES; }
+- (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
+%end
+%end
+
 %group Sports
 // The live games carousel at the top of the home timeline: collapsed rather than just hidden, so it
 // leaves no gap.
@@ -127,6 +139,7 @@ static BOOL LBSwitchOff(NSString *key) {
     }];
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
+    if (objc_getClass("T1ImmersiveFullScreenViewController")) %init(Photos);
     if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);
 
     %init;  // UIKit hooks, always present
