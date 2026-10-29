@@ -33,9 +33,11 @@ static const CGFloat LBCPreferred = 476, LBCMinimum = 400, LBCSliver = 160;
 static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns back onto the stack
 
 // The sidebar's strip down the trailing edge (Tiling.x): the safe area there, or its default.
+CGFloat LBSideStrip(UIWindow *w);   // Tiling.x: the status bar's strip, remembered while it's hidden
+
 static CGFloat LBCSidebarWidth(UIWindow *w) {
-    CGFloat r = w.safeAreaInsets.right;
-    return r >= 40 ? r : 66;
+    CGFloat r = LBSideStrip(w);
+    return r > 0 ? r : 66;
 }
 
 static CGFloat LBCAvailable(UIWindow *w) { return w ? w.bounds.size.width - LBCSidebarWidth(w) : 0; }

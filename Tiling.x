@@ -61,13 +61,43 @@ static const void *kLBSidebar = &kLBSidebar;
 static const void *kLBGlassTabBar = &kLBGlassTabBar;
 static const void *kLBWantedAlpha = &kLBWantedAlpha;
 static const void *kLBTiled = &kLBTiled;
+static const void *kLBSideStrip = &kLBSideStrip;
 
-// The Duo's poses: a window wider than an iPhone held upright, or one whose status bar runs down the
-// trailing edge (a safe area on that side only).
+// The strip down the trailing edge the Duo's status bar runs in (a safe area on that side only), or 0.
+// Hiding the status bar (the media viewer, the slide-over menu) takes the strip's inset away with it, so
+// it's remembered for the window's size: the sidebar stays and the layout under it doesn't change
+// meanwhile (T1HostViewController keeps the inset, below). Also Columns.x's.
+CGFloat LBSideStrip(UIWindow *w) {
+    if (!w) return 0;
+    UIEdgeInsets safe = w.safeAreaInsets;
+    NSValue *size = [NSValue valueWithCGSize:w.bounds.size];
+    NSArray *seen = objc_getAssociatedObject(w, kLBSideStrip);
+    if (safe.right >= 40 && safe.left < 20) {
+        if (![seen.lastObject isEqual:size] || fabs([seen.firstObject doubleValue] - safe.right) >= 0.5)
+            objc_setAssociatedObject(w, kLBSideStrip, @[@(safe.right), size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return safe.right;
+    }
+    return [seen.lastObject isEqual:size] ? [seen.firstObject doubleValue] : 0;
+}
+
+// The Duo's poses: a window wider than an iPhone held upright, or one with the side strip.
 static BOOL LBSidebarWanted(UIWindow *w) {
     if (!w) return NO;
-    UIEdgeInsets safe = w.safeAreaInsets;
-    return w.bounds.size.width >= LBSidebarWindow || (safe.right >= 40 && safe.left < 20);
+    return w.bounds.size.width >= LBSidebarWindow || LBSideStrip(w) > 0;
+}
+
+// While the status bar is hidden the app's own screens keep the strip's inset (the root's additional safe
+// area stands in for it), so the timeline doesn't rewrap and jump; what's presented over them, the media
+// viewer, gets the whole screen.
+static void LBKeepSideStrip(UIViewController *root) {
+    UIWindow *w = root.viewIfLoaded.window;
+    if (!w || w.rootViewController != root) return;
+    CGFloat strip = LBSideStrip(w);
+    CGFloat want = strip > 0 ? MAX(0, strip - w.safeAreaInsets.right) : 0;
+    UIEdgeInsets extra = root.additionalSafeAreaInsets;
+    if (fabs(extra.right - want) < 0.5) return;
+    extra.right = want;
+    root.additionalSafeAreaInsets = extra;
 }
 
 static UIVisualEffectView *LBGlassView(UIColor *tint) {
@@ -397,8 +427,8 @@ static BOOL LBIsGrokTab(UIView *tab) {
 
 // The strip down the trailing edge: the safe area there, which the status bar's strip is, or a default.
 static CGFloat LBStripWidth(UIView *host) {
-    CGFloat r = host.safeAreaInsets.right;
-    return r >= 40 ? r : LBStripDefault;
+    CGFloat r = LBSideStrip(host.window);
+    return r > 0 ? r : LBStripDefault;
 }
 
 // Under the status bar. Where it runs down the side (the Duo: no top safe area), iOS reports it as a
@@ -925,6 +955,14 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (screen && MIN(screen.bounds.size.width, screen.bounds.size.height) < LBSidebarWindow)
         return UIInterfaceOrientationMaskPortrait;
     return %orig;
+}
+- (void)viewSafeAreaInsetsDidChange {
+    %orig;
+    LBKeepSideStrip(self);
+}
+- (void)viewDidLayoutSubviews {
+    %orig;
+    LBKeepSideStrip(self);
 }
 %end
 %end
