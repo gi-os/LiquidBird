@@ -78,7 +78,7 @@ python3 -I "$DIR/server.py" "$PORT" "$TOKEN" "$BASE" "$DIR/udid" "$UUID" >"$DIR/
 for _ in $(seq 30); do curl -fsS -o /dev/null "$BASE/" 2>/dev/null && break; sleep 2; done
 echo "Registration link, open on the device in Safari: $BASE/"
 for _ in $(seq $(( MINUTES * 12 ))); do
-  [[ -s "$DIR/udid" ]] && { cat "$DIR/udid"; sleep 5; exit 0; }
+  [[ -s "$DIR/udid" ]] && { cat "$DIR/udid"; sleep 60; exit 0; }   # iOS follows the redirect after a delay
   sleep 5
 done
 echo "No device registered within $MINUTES minutes." >&2; exit 1
