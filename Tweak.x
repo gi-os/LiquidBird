@@ -11,6 +11,7 @@
 @interface T1LiveBroadcastCell : UIView @end
 @interface TFSFeatureSwitches : NSObject @end
 @interface T1ImmersiveFullScreenViewController : UIViewController @end
+@interface TFNHUDStatusBarController : UIViewController @end
 @interface TFNFullscreenMediaTransition : NSObject @end
 @interface T1ImmersiveViewController : UIViewController @end
 @interface _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager : UIViewController @end
@@ -106,15 +107,6 @@ static BOOL LBSwitchOff(NSString *key) {
 
 // ---------- Photos ----------
 
-// The full-screen media viewer keeps the status bar hidden throughout, chrome shown or not; it
-// takes the status bar over from whatever presented it.
-%group Photos
-%hook T1ImmersiveFullScreenViewController
-- (BOOL)prefersStatusBarHidden { return YES; }
-- (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
-%end
-%end
-
 // Photos and videos open in X's immersive viewer (MultiImmersiveViewControllerManager, holding
 // T1ImmersiveViewControllers), which decides the status bar through its children; it's hidden there, and
 // the app's root hides it too while one is on screen, however it was put there.
@@ -131,10 +123,31 @@ static BOOL LBImmersiveShowing(void) {
     return NO;
 }
 
+// Every window's say is asked again: X's HUD window, over the app, decides it too.
 static void LBStatusBarChanged(UIViewController *vc) {
-    UIViewController *root = vc.viewIfLoaded.window.rootViewController;
-    for (UIViewController *v = root; v; v = v.presentedViewController) [v setNeedsStatusBarAppearanceUpdate];
+    UIWindowScene *scene = vc.viewIfLoaded.window.windowScene;
+    for (UIWindow *w in scene.windows)
+        for (UIViewController *v = w.rootViewController; v; v = v.presentedViewController) [v setNeedsStatusBarAppearanceUpdate];
 }
+
+// The full-screen media viewer keeps the status bar hidden throughout, chrome shown or not; it
+// takes the status bar over from whatever presented it.
+%group Photos
+%hook T1ImmersiveFullScreenViewController
+- (BOOL)prefersStatusBarHidden { return YES; }
+- (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
+- (void)viewWillAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(self); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(self); }
+%end
+%end
+
+// X's HUD window (TFNHUDWindow) sits over the app and takes the status bar from the app's own window, so
+// it hides it as well while the media viewer is up.
+%group HUDStatusBar
+%hook TFNHUDStatusBarController
+- (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
+%end
+%end
 
 %group Immersive
 %hook _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager
@@ -196,6 +209,7 @@ static void LBStatusBarChanged(UIViewController *vc) {
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
     if (objc_getClass("T1ImmersiveFullScreenViewController")) %init(Photos);
     if (objc_getClass("TFNFullscreenMediaTransition")) %init(MediaTransition);
+    if (objc_getClass("TFNHUDStatusBarController")) %init(HUDStatusBar);
     if (objc_getClass("_TtC14T1TwitterSwift35MultiImmersiveViewControllerManager") && objc_getClass("T1ImmersiveViewController") &&
         objc_getClass("T1HostViewController")) %init(Immersive);
     if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);

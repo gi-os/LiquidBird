@@ -31,6 +31,7 @@
 @end
 @interface _TtC11XNavigation10TabBarPill : UIView
 @end
+@interface _TtC11XNavigation25TabBarChromeContainerView : UIView @end
 @interface _TtC11XNavigation25TabBarAccessoryButtonView : UIView
 @end
 @interface TFNFloatingActionButton : UIView
@@ -143,7 +144,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 @end
 
 @implementation LBSidebar {
-    UIVisualEffectView *_logoGlass, *_rail, *_composeGlass;
+    UIVisualEffectView *_logoGlass, *_rail;
     UIButton *_logo, *_compose;
     NSMutableArray<UIButton *> *_buttons;
     void (^_activate)(NSInteger);
@@ -170,9 +171,10 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
         [_logoGlass.contentView addSubview:_logo];
         _rail = LBGlassView(nil);
         [self addSubview:_rail];
-        _composeGlass = LBGlassView([UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1]);
-        [self addSubview:_composeGlass];
-        _compose = LBGlassButton(_composeGlass, @"plus", 22, self, @selector(composeTapped), @"New Tweet");
+        // Compose is the rail's last row, a blue circle in the same glass.
+        _compose = LBGlassButton(_rail, @"plus", 20, self, @selector(composeTapped), @"New Tweet");
+        _compose.backgroundColor = [UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1];
+        _compose.layer.cornerCurve = kCACornerCurveContinuous;
         _buttons = [NSMutableArray array];
     }
     return self;
@@ -180,7 +182,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 // Only the glass takes touches; the strip around it stays the app's.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    for (UIView *g in @[_logoGlass, _rail, _composeGlass])
+    for (UIView *g in @[_logoGlass, _rail])
         if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
     return NO;
 }
@@ -254,7 +256,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     [self setNeedsLayout];
 }
 
-// One column, packed from the bottom up: compose, the tab rail, and the logo on top. Packing from the
+// One column, packed from the bottom up: the tab rail (compose its last row), and the logo on top. Packing from the
 // bottom leaves the most room under the status bar, which grows with what it shows (Focus, Live
 // Activities). A short pose (the Duo unfolded is about 470pt tall) tightens the gaps and shrinks the
 // rows to stay under the status bar.
@@ -265,32 +267,28 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     CGFloat room = bottom - self.top;
     NSUInteger n = _buttons.count;
     BOOL compose = !self.composeHidden;
-    CGFloat pad = 4;
-    CGFloat full = 40 + 14 + (n * LBRow + 2 * pad) + (compose ? 14 + LBGlassWidth : 0);
+    CGFloat pad = 4, inner = LBGlassWidth - 2 * pad;   // a row's lozenge; compose's circle
+    CGFloat composeRoom = compose ? pad + inner : 0;
+    CGFloat full = 40 + 14 + (n * LBRow + 2 * pad) + composeRoom;
     BOOL tight = full > room;
-    CGFloat gap = tight ? 10 : 14, logo = tight ? 34 : 40, composeSize = tight ? 48 : LBGlassWidth;
-    CGFloat fixed = logo + gap + 2 * pad + (compose ? gap + composeSize : 0);
+    CGFloat gap = tight ? 10 : 14, logo = tight ? 34 : 40;
+    CGFloat fixed = logo + gap + 2 * pad + composeRoom;
     CGFloat row = n ? MAX(34, MIN(LBRow, floor((room - fixed) / n))) : LBRow;
 
     CGFloat y = bottom;
-    _composeGlass.hidden = !compose;
-    if (compose) {
-        y -= composeSize;
-        _composeGlass.frame = CGRectMake(mid - composeSize / 2, y, composeSize, composeSize);
-        _composeGlass.layer.cornerRadius = composeSize / 2;
-        _compose.frame = _composeGlass.contentView.bounds;
-        y -= gap;
-    }
-    CGFloat rail = n * row + 2 * pad;
+    CGFloat rail = n * row + 2 * pad + composeRoom;
     y -= rail;
-    _rail.hidden = n == 0;
+    _rail.hidden = n == 0 && !compose;
     _rail.frame = CGRectMake(mid - LBGlassWidth / 2, y, LBGlassWidth, rail);
     _rail.layer.cornerRadius = LBGlassWidth / 2;
     for (NSUInteger i = 0; i < n; i++) {
         UIButton *b = _buttons[i];
-        b.frame = CGRectMake(pad, pad + i * row, LBGlassWidth - 2 * pad, row);
-        b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
+        b.frame = CGRectMake(pad, pad + i * row, inner, row);
+        b.layer.cornerRadius = inner / 2;
     }
+    _compose.hidden = !compose;
+    _compose.frame = CGRectMake(pad, pad + n * row + pad, inner, inner);
+    _compose.layer.cornerRadius = inner / 2;
     y -= gap + logo;
     _logoGlass.frame = CGRectMake(mid - logo / 2, y, logo, logo);
     _logoGlass.layer.cornerRadius = logo / 2;

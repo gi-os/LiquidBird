@@ -73,7 +73,13 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
     [out appendFormat:@"window %@ safeArea %@ sizeClass h%ld v%ld\n", NSStringFromCGRect(w.bounds),
                       NSStringFromUIEdgeInsets(w.safeAreaInsets), (long)w.traitCollection.horizontalSizeClass,
                       (long)w.traitCollection.verticalSizeClass];
-    [out appendFormat:@"statusBar %@\n", NSStringFromCGRect(scene.statusBarManager.statusBarFrame)];
+    [out appendFormat:@"statusBar %@%@\n", NSStringFromCGRect(scene.statusBarManager.statusBarFrame),
+                      scene.statusBarManager.isStatusBarHidden ? @" hidden" : @""];
+    // Which window decides the status bar: the topmost, through its root's say.
+    for (UIWindow *win in scene.windows)
+        [out appendFormat:@"  %@ level %.0f%@%@ %@ root %@ prefersHidden %d\n", NSStringFromClass(win.class), win.windowLevel,
+                          win.hidden ? @" hidden" : @"", win.isKeyWindow ? @" key" : @"", NSStringFromCGRect(win.frame),
+                          NSStringFromClass(win.rootViewController.class), win.rootViewController.prefersStatusBarHidden];
     [out appendFormat:@"Explore panel: %@\n\n", LBCPanelStatus];
     [out appendString:@"== view controllers\n"];
     if (w.rootViewController) LBDumpViewController(w.rootViewController, 0, out);
