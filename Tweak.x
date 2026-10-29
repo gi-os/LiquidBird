@@ -12,6 +12,7 @@
 @interface TFSFeatureSwitches : NSObject @end
 @interface T1ImmersiveFullScreenViewController : UIViewController @end
 @interface TFNHUDStatusBarController : UIViewController @end
+@interface XNAVNavigationController : UINavigationController @end
 @interface TFNFullscreenMediaTransition : NSObject @end
 @interface T1ImmersiveViewController : UIViewController @end
 @interface _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager : UIViewController @end
@@ -140,7 +141,27 @@ static void LBStatusBarChanged(UIViewController *vc) {
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
 - (void)viewWillAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(self); }
+- (void)viewDidAppear:(BOOL)animated { %orig; LBStatusBarChanged(self); }
 - (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(self); }
+%end
+%end
+
+// What iOS actually asks. Photos and videos (T1ImmersiveFullscreenHandler) present the viewer inside one of
+// X's navigation controllers, an XNAVNavigationController with Liquid Glass on
+// (T1ImmersiveFullScreenViewController tfnPresentedCustomPresentFromViewController:animated:completion:
+// wraps it with NavigationControllerFactoryTFNFallback, then sets the wrapper's
+// modalPresentationCapturesStatusBarAppearance and a custom presentation style). That wrapper owns the status
+// bar and doesn't pass the question on to the viewer, whose own answer (hidden only in landscape) never
+// counted either; so the wrapper answers: hidden while the viewer is on top.
+static BOOL LBWrapsImmersive(UINavigationController *nav) {
+    Class viewer = objc_getClass("T1ImmersiveFullScreenViewController");
+    return viewer && [nav.topViewController isKindOfClass:viewer];
+}
+
+%group ImmersiveWrapper
+%hook XNAVNavigationController
+- (BOOL)prefersStatusBarHidden { return LBWrapsImmersive(self) ? YES : %orig; }
+- (UIViewController *)childViewControllerForStatusBarHidden { return LBWrapsImmersive(self) ? nil : %orig; }
 %end
 %end
 
@@ -213,6 +234,7 @@ static void LBStatusBarChanged(UIViewController *vc) {
     if (objc_getClass("T1ImmersiveFullScreenViewController")) %init(Photos);
     if (objc_getClass("TFNFullscreenMediaTransition")) %init(MediaTransition);
     if (objc_getClass("TFNHUDStatusBarController")) %init(HUDStatusBar);
+    if (objc_getClass("XNAVNavigationController") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(ImmersiveWrapper);
     if (objc_getClass("_TtC14T1TwitterSwift35MultiImmersiveViewControllerManager") && objc_getClass("T1ImmersiveViewController") &&
         objc_getClass("T1HostViewController")) %init(Immersive);
     if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);
