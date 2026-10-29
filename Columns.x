@@ -328,6 +328,7 @@ static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
 static const CGFloat LBCWide = 600, LBCPanelMinimum = 240, LBCPanelMaximum = 380;
 static const void *kLBCWantsHidden = &kLBCWantsHidden;
 static const void *kLBCPanel = &kLBCPanel;
+static const void *kLBCPanelRect = &kLBCPanelRect;
 NSString *LBCPanelStatus = @"not laid out yet";   // for the layout copy (Debug.x)
 static const void *kLBCHint = &kLBCHint;
 
@@ -449,7 +450,9 @@ static void LBCShowHint(UIView *tabsView, BOOL show) {
     CGFloat x = LBCFeedOnRight() ? 0 : LBCAvailable(w) - panelWidth;
     hint.frame = [tabsView convertRect:CGRectMake(x, 0, panelWidth, w.bounds.size.height) fromView:nil];
     hint.hidden = NO;
-    if (hint.superview != tabsView) [tabsView insertSubview:hint atIndex:0];
+    hint.userInteractionEnabled = NO;
+    if (hint.superview != tabsView) [tabsView addSubview:hint];
+    [tabsView bringSubviewToFront:hint];
 }
 
 // Lays the tabs out: Explore as the panel on the right and the selected tab narrowed beside it, or both
@@ -469,27 +472,39 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     // X makes a tab the first time it's shown. Switching to Explore on its behalf at launch broke Home's
     // first load (it never finished), so until it's been opened the panel's place says so instead.
     LBCShowHint(view, wide && LBCExploreEnabled() && !exploreView && !exploreSelected);
+    // X lays its tabs out with constraints, which undo frames set from here, so the feed narrows through
+    // the safe area its screens already respect (as they do the sidebar's strip): the selected tab gets
+    // the panel's width on the panel's side. Explore keeps its full frame but takes the feed's width on
+    // the other side, shows only through its strip (a mask) and takes touches only there.
+    CGFloat panelWidth = LBCPanelWidth(w), feed = LBCAvailable(w) - panelWidth;
+    BOOL right = wide && LBCFeedOnRight();
+    CGRect panelRect = CGRectMake(right ? 0 : feed, 0, panelWidth, w.bounds.size.height);
+    for (UIViewController *c in tabs.childViewControllers) {
+        if (![c isKindOfClass:UINavigationController.class]) continue;
+        BOOL isPanel = c == explore && panel;
+        UIEdgeInsets extra = c.additionalSafeAreaInsets;
+        CGFloat left = !wide ? 0 : isPanel ? (right ? 0 : feed) : (right ? panelWidth : 0);
+        CGFloat rightInset = !wide ? 0 : isPanel ? (right ? feed : 0) : (right ? 0 : panelWidth);
+        if (fabs(extra.left - left) >= 0.5 || fabs(extra.right - rightInset) >= 0.5) {
+            extra.left = left;
+            extra.right = rightInset;
+            c.additionalSafeAreaInsets = extra;
+        }
+    }
     if (exploreView) {
         objc_setAssociatedObject(exploreView, kLBCPanel, @(panel), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below
-    }
-    CGFloat width = view.bounds.size.width;
-    CGFloat panelWidth = [view convertRect:CGRectMake(0, 0, LBCPanelWidth(w), 1) fromView:nil].size.width;
-    // Wherever there's room the feed is narrow, Explore or black beside it; a two-finger swipe (or the
-    // logo's menu) puts it on either side.
-    CGFloat feed = wide ? [view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCPanelWidth(w), 1) fromView:nil].size.width : width;
-    BOOL right = wide && LBCFeedOnRight();
-    for (UIViewController *c in tabs.childViewControllers) {
-        UIView *v = c.viewIfLoaded;
-        if (!v || ![c isKindOfClass:UINavigationController.class]) continue;
-        CGRect f = v.frame;
-        if (c == explore && panel) {
-            f = CGRectMake(right ? 0 : feed, 0, panelWidth, view.bounds.size.height);
+        CGRect inExplore = [exploreView convertRect:panelRect fromView:nil];
+        objc_setAssociatedObject(exploreView, kLBCPanelRect, panel ? [NSValue valueWithCGRect:inExplore] : nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (panel) {
+            CALayer *mask = exploreView.layer.mask ?: [CALayer layer];
+            mask.backgroundColor = UIColor.blackColor.CGColor;
+            mask.frame = inExplore;
+            exploreView.layer.mask = mask;
         } else {
-            f.origin.x = right ? panelWidth : 0;
-            f.size.width = feed;
+            exploreView.layer.mask = nil;
         }
-        if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
+        [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below
     }
     if (explore.isViewLoaded) LBCTrimExploreBar(explore, panel);
     LBCStripFor(w, NO).fromLeading = right;
@@ -532,6 +547,12 @@ static void LBCLayoutPanel(UIViewController *tabs) {
 - (void)setHidden:(BOOL)hidden {
     objc_setAssociatedObject(self, kLBCWantsHidden, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     %orig(hidden && ![objc_getAssociatedObject(self, kLBCPanel) boolValue]);
+}
+// As the panel, Explore spans the window (masked to its strip) and takes touches only in its strip.
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    NSValue *rect = objc_getAssociatedObject(self, kLBCPanelRect);
+    if (rect && !CGRectContainsPoint(rect.CGRectValue, point)) return NO;
+    return %orig;
 }
 %end
 
