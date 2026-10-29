@@ -123,11 +123,14 @@ static BOOL LBImmersiveShowing(void) {
     return NO;
 }
 
-// Every window's say is asked again: X's HUD window, over the app, decides it too.
+// Every window's say is asked again: X's HUD window, over the app, decides it too. (Every scene's: once
+// the viewer has gone, it has no window to say which.)
 static void LBStatusBarChanged(UIViewController *vc) {
-    UIWindowScene *scene = vc.viewIfLoaded.window.windowScene;
-    for (UIWindow *w in scene.windows)
-        for (UIViewController *v = w.rootViewController; v; v = v.presentedViewController) [v setNeedsStatusBarAppearanceUpdate];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows)
+            for (UIViewController *v = w.rootViewController; v; v = v.presentedViewController) [v setNeedsStatusBarAppearanceUpdate];
+    }
 }
 
 // The full-screen media viewer keeps the status bar hidden throughout, chrome shown or not; it
