@@ -504,7 +504,7 @@ static CGFloat LBBarAlpha(UIView *v, CGFloat wanted) {
     return LBSidebarWanted(v.window) ? 0 : wanted;
 }
 
-// For Columns.x: the selected tab's name, and selecting a tab by name, through X's glass tab bar.
+// For Columns.x: the selected tab's name, through X's glass tab bar.
 NSString *LBSelectedTabLabel(UIWindow *w) {
     UIView *tabBar = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue];
     if (!tabBar.window) return nil;
@@ -513,12 +513,6 @@ NSString *LBSelectedTabLabel(UIWindow *w) {
     return i >= 0 && i < (NSInteger)tabs.count ? tabs[i].accessibilityLabel : nil;
 }
 
-BOOL LBActivateTab(UIWindow *w, NSString *label) {
-    UIView *tabBar = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue];
-    for (UIView *tab in LBGlassTabs(tabBar))
-        if ([tab.accessibilityLabel isEqualToString:label]) { [tab accessibilityActivate]; return YES; }
-    return NO;
-}
 
 static void LBSyncGlassTabBar(UIView *tabBar) {
     UIWindow *w = tabBar.window;
@@ -538,6 +532,11 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 
 %group GlassTabBar
 %hook _TtC11XNavigation10TabBarView
+// Faded as soon as it's on screen (unfolded, the + was laid out before it had a window).
+- (void)didMoveToWindow {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
 - (void)layoutSubviews {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
@@ -549,6 +548,11 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 %end
 
 %hook _TtC11XNavigation10TabBarPill
+// Faded as soon as it's on screen (unfolded, the + was laid out before it had a window).
+- (void)didMoveToWindow {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
 - (void)layoutSubviews {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
@@ -561,6 +565,11 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 // X's own compose buttons (the floating one, and the glass tab bar's accessory) give way to the
 // sidebar's.
 %hook TFNFloatingActionButton
+// Faded as soon as it's on screen (unfolded, the + was laid out before it had a window).
+- (void)didMoveToWindow {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
 - (void)layoutSubviews {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
@@ -573,6 +582,11 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 
 %group GlassAccessory
 %hook _TtC11XNavigation25TabBarAccessoryButtonView
+// Faded as soon as it's on screen (unfolded, the + was laid out before it had a window).
+- (void)didMoveToWindow {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
 - (void)layoutSubviews {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
