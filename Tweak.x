@@ -11,9 +11,7 @@
 @interface T1LiveBroadcastCell : UIView @end
 @interface TFSFeatureSwitches : NSObject @end
 @interface T1ImmersiveFullScreenViewController : UIViewController @end
-@interface TFNHUDStatusBarController : UIViewController @end
 @interface XNAVNavigationController : UINavigationController @end
-@interface TFNFullscreenMediaTransition : NSObject @end
 @interface T1ImmersiveViewController : UIViewController @end
 @interface _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager : UIViewController @end
 @interface T1HostViewController : UIViewController @end
@@ -108,9 +106,11 @@ static BOOL LBSwitchOff(NSString *key) {
 
 // ---------- Photos ----------
 
-// Photos and videos open in X's immersive viewer (MultiImmersiveViewControllerManager, holding
-// T1ImmersiveViewControllers), which decides the status bar through its children; it's hidden there, and
-// the app's root hides it too while one is on screen, however it was put there.
+// Photos and videos (T1ImmersiveFullscreenHandler) open X's full-screen viewer, T1ImmersiveFullScreenViewController
+// (holding a MultiImmersiveViewControllerManager and its T1ImmersiveViewControllers), which hides the
+// status bar only in landscape. The status bar goes while one is open, folded too. It changes only once
+// the viewer has finished opening, and comes back once it has finished closing: hiding it takes the Duo's
+// side strip away, and doing that mid-animation moved the screens under X's own transitions.
 static NSHashTable<UIViewController *> *LBImmersives(void) {
     static NSHashTable *table;
     static dispatch_once_t once;
@@ -124,38 +124,25 @@ static BOOL LBImmersiveShowing(void) {
     return NO;
 }
 
-// Every window's say is asked again: X's HUD window, over the app, decides it too. (Every scene's: once
-// the viewer has gone, it has no window to say which.)
-static void LBStatusBarChanged(UIViewController *vc) {
+// The app's own windows are asked again (not the system's keyboard windows).
+static void LBStatusBarChanged(void) {
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
-        for (UIWindow *w in ((UIWindowScene *)scene).windows)
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (w.hidden || [NSStringFromClass(w.class) hasPrefix:@"UI"]) continue;
             for (UIViewController *v = w.rootViewController; v; v = v.presentedViewController) [v setNeedsStatusBarAppearanceUpdate];
+        }
     }
 }
 
-// The full-screen media viewer keeps the status bar hidden throughout, chrome shown or not; it
-// takes the status bar over from whatever presented it.
-%group Photos
-%hook T1ImmersiveFullScreenViewController
-- (BOOL)prefersStatusBarHidden { return YES; }
-- (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
-- (void)viewWillAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(self); }
-- (void)viewDidAppear:(BOOL)animated { %orig; LBStatusBarChanged(self); }
-- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(self); }
-%end
-%end
-
-// What iOS actually asks. Photos and videos (T1ImmersiveFullscreenHandler) present the viewer inside one of
-// X's navigation controllers, an XNAVNavigationController with Liquid Glass on
-// (T1ImmersiveFullScreenViewController tfnPresentedCustomPresentFromViewController:animated:completion:
-// wraps it with NavigationControllerFactoryTFNFallback, then sets the wrapper's
-// modalPresentationCapturesStatusBarAppearance and a custom presentation style). That wrapper owns the status
-// bar and doesn't pass the question on to the viewer, whose own answer (hidden only in landscape) never
-// counted either; so the wrapper answers: hidden while the viewer is on top.
+// What iOS actually asks: the viewer is presented inside one of X's navigation controllers, an
+// XNAVNavigationController with Liquid Glass on (its tfnPresentedCustomPresentFromViewController:animated:completion:
+// wraps it with NavigationControllerFactoryTFNFallback and sets the wrapper's
+// modalPresentationCapturesStatusBarAppearance, with a custom presentation style). That wrapper owns the
+// status bar and doesn't pass the question on, so it answers.
 static BOOL LBWrapsImmersive(UINavigationController *nav) {
     Class viewer = objc_getClass("T1ImmersiveFullScreenViewController");
-    return viewer && [nav.topViewController isKindOfClass:viewer];
+    return viewer && [nav.topViewController isKindOfClass:viewer] && LBImmersiveShowing();
 }
 
 %group ImmersiveWrapper
@@ -165,41 +152,27 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
 %end
 %end
 
-// X's HUD window (TFNHUDWindow) sits over the app and takes the status bar from the app's own window, so
-// it hides it as well while the media viewer is up.
-%group HUDStatusBar
-%hook TFNHUDStatusBarController
-- (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
-%end
-%end
-
 %group Immersive
+%hook T1ImmersiveFullScreenViewController
+- (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
+- (void)viewDidAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(); }
+- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(); }
+%end
+
 %hook _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager
-- (BOOL)prefersStatusBarHidden { return YES; }
-- (UIViewController *)childViewControllerForStatusBarHidden { return nil; }
-- (BOOL)modalPresentationCapturesStatusBarAppearance { return YES; }
-- (void)viewWillAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(self); }
-- (void)viewDidAppear:(BOOL)animated { %orig; LBStatusBarChanged(self); }
-- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(self); }
-%end
-
-%hook T1ImmersiveViewController
-- (BOOL)prefersStatusBarHidden { return YES; }
-- (void)viewWillAppear:(BOOL)animated { %orig; [LBImmersives() addObject:self]; LBStatusBarChanged(self); }
-- (void)viewDidAppear:(BOOL)animated { %orig; LBStatusBarChanged(self); }
-- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(self); }
-%end
-
-%hook T1HostViewController
 - (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
 - (UIViewController *)childViewControllerForStatusBarHidden { return LBImmersiveShowing() ? nil : %orig; }
 %end
+
+%hook T1ImmersiveViewController
+- (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
 %end
 
-// The transition that presents it decides too, for whatever it presents.
-%group MediaTransition
-%hook TFNFullscreenMediaTransition
-+ (BOOL)_prefersStatusBarHidden:(id)controller { return YES; }
+// While it's open, the app's root (asked once the viewer starts closing) says the same, so nothing
+// changes until it's gone.
+%hook T1HostViewController
+- (BOOL)prefersStatusBarHidden { return LBImmersiveShowing() ? YES : %orig; }
+- (UIViewController *)childViewControllerForStatusBarHidden { return LBImmersiveShowing() ? nil : %orig; }
 %end
 %end
 
@@ -231,12 +204,9 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
     }];
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
-    if (objc_getClass("T1ImmersiveFullScreenViewController")) %init(Photos);
-    if (objc_getClass("TFNFullscreenMediaTransition")) %init(MediaTransition);
-    if (objc_getClass("TFNHUDStatusBarController")) %init(HUDStatusBar);
     if (objc_getClass("XNAVNavigationController") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(ImmersiveWrapper);
-    if (objc_getClass("_TtC14T1TwitterSwift35MultiImmersiveViewControllerManager") && objc_getClass("T1ImmersiveViewController") &&
-        objc_getClass("T1HostViewController")) %init(Immersive);
+    if (objc_getClass("T1ImmersiveFullScreenViewController") && objc_getClass("_TtC14T1TwitterSwift35MultiImmersiveViewControllerManager") &&
+        objc_getClass("T1ImmersiveViewController") && objc_getClass("T1HostViewController")) %init(Immersive);
     if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);
 
     %init;  // UIKit hooks, always present
