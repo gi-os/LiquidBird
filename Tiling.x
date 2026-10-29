@@ -4,10 +4,10 @@
 
 // Twitter for iPad's layout on the iPhone Duo's wide poses, after gi-os/twitter's TabStackView and
 // ClassicSidebar, in Liquid Glass. Down the strip the status bar sits in on the trailing edge: a small
-// Twitter logo that opens the slide-over menu (the Home top bar it stands in for is hidden), a glass
-// rail of the tabs (Grok left out), and at the bottom compose and a gear for NeoFreeBird's settings, in
-// place of the tab bar and X's own compose button; where there's room for two columns, the current tab
-// is a column card centred on a backdrop.
+// Twitter logo (tap: NeoFreeBird's settings; long-press: the slide-over menu, which the hidden Home top
+// bar's avatar opened), a glass rail of the tabs (Grok left out), and compose (unless NeoFreeBird's
+// "hide tweet button" is on), in place of the tab bar and X's own compose button; where there's room
+// for two columns, the current tab is a column card centred on a backdrop.
 // Narrow windows (folded) stay stock. Step 1 of 2; step 2 opens tweets, profiles and links as
 // further columns.
 //
@@ -35,9 +35,7 @@
 @end
 @interface TFNFloatingActionButton : UIView
 @end
-@interface XNAVNavigationController : UINavigationController
-@end
-@interface _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController : UIViewController
+@interface _TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar : UINavigationBar
 @end
 
 static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
@@ -125,7 +123,8 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 // How far the column's centre line sits from the strip's: iPhone Duo's side status bar is centred a
 // little in from the display's rounded corner (gi-os/twitter's ClassicSidebar centerOffset, -5).
 @property (nonatomic) CGFloat centreOffset;
-@property (nonatomic, copy) void (^logoAction)(void);
+@property (nonatomic) BOOL composeHidden;
+@property (nonatomic, copy) void (^menuAction)(void);
 @property (nonatomic, copy) void (^composeAction)(void);
 @property (nonatomic, copy) void (^settingsAction)(void);
 - (void)setLogo:(UIImage *)logo;
@@ -133,8 +132,8 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 @end
 
 @implementation LBSidebar {
-    UIVisualEffectView *_logoGlass, *_rail, *_composeGlass, *_settingsGlass;
-    UIButton *_logo, *_compose, *_settings;
+    UIVisualEffectView *_logoGlass, *_rail, *_composeGlass;
+    UIButton *_logo, *_compose;
     NSMutableArray<UIButton *> *_buttons;
     void (^_activate)(NSInteger);
 }
@@ -145,10 +144,10 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
         _logoGlass = LBGlassView(nil);
         [self addSubview:_logoGlass];
         _logo = [UIButton buttonWithType:UIButtonTypeCustom];
-        _logo.accessibilityLabel = @"Menu";
+        _logo.accessibilityLabel = @"NeoFreeBird settings";
         _logo.imageView.contentMode = UIViewContentModeScaleAspectFit;
         [_logo addTarget:self action:@selector(logoTapped) forControlEvents:UIControlEventTouchUpInside];
-        // Long-press: NeoFreeBird's settings, for when the gear has no room.
+        // Long-press: the slide-over menu, which the hidden Home top bar's avatar opened.
         [_logo addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(logoPressed:)]];
         [_logoGlass.contentView addSubview:_logo];
         _rail = LBGlassView(nil);
@@ -156,10 +155,6 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
         _composeGlass = LBGlassView([UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1]);
         [self addSubview:_composeGlass];
         _compose = LBGlassButton(_composeGlass, @"plus", 22, self, @selector(composeTapped), @"New Tweet");
-        _settingsGlass = LBGlassView(nil);
-        [self addSubview:_settingsGlass];
-        _settings = LBGlassButton(_settingsGlass, @"gearshape", 15, self, @selector(settingsTapped), @"NeoFreeBird settings");
-        _settings.tintColor = [UIColor colorWithWhite:0.75 alpha:1];
         _buttons = [NSMutableArray array];
     }
     return self;
@@ -167,17 +162,22 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 // Only the glass takes touches; the strip around it stays the app's.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    for (UIView *g in @[_logoGlass, _rail, _composeGlass, _settingsGlass])
+    for (UIView *g in @[_logoGlass, _rail, _composeGlass])
         if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
     return NO;
 }
 
 - (void)tapped:(UIButton *)b { if (_activate) _activate(b.tag); }
-- (void)logoTapped { if (self.logoAction) self.logoAction(); }
+- (void)logoTapped { if (self.settingsAction) self.settingsAction(); }
 - (void)composeTapped { if (self.composeAction) self.composeAction(); }
-- (void)settingsTapped { if (self.settingsAction) self.settingsAction(); }
 - (void)logoPressed:(UILongPressGestureRecognizer *)g {
-    if (g.state == UIGestureRecognizerStateBegan && self.settingsAction) self.settingsAction();
+    if (g.state == UIGestureRecognizerStateBegan && self.menuAction) self.menuAction();
+}
+
+- (void)setComposeHidden:(BOOL)hidden {
+    if (_composeHidden == hidden) return;
+    _composeHidden = hidden;
+    [self setNeedsLayout];
 }
 
 - (void)setLogo:(UIImage *)logo {
@@ -210,38 +210,33 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     [self setNeedsLayout];
 }
 
-// One column, packed from the bottom up: the gear, compose, the tab rail, and the logo on top. Packing
-// from the bottom leaves the most room under the status bar, which grows with what it shows (Focus,
-// Live Activities). A short pose (the Duo unfolded is about 470pt tall) drops the gear (the logo's
-// long-press has it), tightens the gaps and shrinks the rows to stay under the status bar.
+// One column, packed from the bottom up: compose, the tab rail, and the logo on top. Packing from the
+// bottom leaves the most room under the status bar, which grows with what it shows (Focus, Live
+// Activities). A short pose (the Duo unfolded is about 470pt tall) tightens the gaps and shrinks the
+// rows to stay under the status bar.
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat mid = round(self.bounds.size.width / 2 + self.centreOffset);
     CGFloat bottom = self.bounds.size.height - MAX(self.safeAreaInsets.bottom, 16);
     CGFloat room = bottom - self.top;
     NSUInteger n = _buttons.count;
+    BOOL compose = !self.composeHidden;
     CGFloat pad = 4;
-    CGFloat full = 40 + 14 + (n * LBRow + 2 * pad) + 14 + LBGlassWidth + 14 + 40;
+    CGFloat full = 40 + 14 + (n * LBRow + 2 * pad) + (compose ? 14 + LBGlassWidth : 0);
     BOOL tight = full > room;
-    CGFloat gap = tight ? 10 : 14, logo = tight ? 34 : 40, compose = tight ? 48 : LBGlassWidth, gear = 40;
-    CGFloat fixed = logo + gap + 2 * pad + gap + compose + (tight ? 0 : gap + gear);
+    CGFloat gap = tight ? 10 : 14, logo = tight ? 34 : 40, composeSize = tight ? 48 : LBGlassWidth;
+    CGFloat fixed = logo + gap + 2 * pad + (compose ? gap + composeSize : 0);
     CGFloat row = n ? MAX(34, MIN(LBRow, floor((room - fixed) / n))) : LBRow;
 
     CGFloat y = bottom;
-    _settingsGlass.hidden = tight;
-    if (!tight) {
-        y -= gear;
-        _settingsGlass.frame = CGRectMake(mid - gear / 2, y, gear, gear);
-        _settingsGlass.layer.cornerRadius = gear / 2;
-        _settings.frame = _settingsGlass.contentView.bounds;
+    _composeGlass.hidden = !compose;
+    if (compose) {
+        y -= composeSize;
+        _composeGlass.frame = CGRectMake(mid - composeSize / 2, y, composeSize, composeSize);
+        _composeGlass.layer.cornerRadius = composeSize / 2;
+        _compose.frame = _composeGlass.contentView.bounds;
         y -= gap;
     }
-    y -= compose;
-    _composeGlass.frame = CGRectMake(mid - compose / 2, y, compose, compose);
-    _composeGlass.layer.cornerRadius = compose / 2;
-    _compose.frame = _composeGlass.contentView.bounds;
-    y -= gap;
-
     CGFloat rail = n * row + 2 * pad;
     y -= rail;
     _rail.hidden = n == 0;
@@ -377,7 +372,7 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
     if (!bar) {
         bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
         __weak UIWindow *weakWindow = w;
-        bar.logoAction = ^{ LBToggleDash(weakWindow); };
+        bar.menuAction = ^{ LBToggleDash(weakWindow); };
         bar.composeAction = ^{ LBCompose(weakWindow); };
         bar.settingsAction = ^{ LBOpenNeoFreeBirdSettings(weakWindow); };
         objc_setAssociatedObject(w, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -398,6 +393,8 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
     bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
     bar.top = LBStatusBottom(host);
     bar.centreOffset = host.safeAreaInsets.top < 1 ? -5 : 0;
+    // NeoFreeBird's "hide tweet button" (BHTSettings, in the standard defaults) takes compose out here too.
+    bar.composeHidden = [NSUserDefaults.standardUserDefaults boolForKey:@"hide_tweet_button"];
     [bar setLogo:LBTwitterLogo(w)];
     [bar setTabs:shown selected:shownSelected activate:^(NSInteger i) {
         if (i < (NSInteger)index.count) activate(index[i].integerValue);
@@ -530,39 +527,40 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 // MARK: - Home's top bar
 
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
-// the slide-over menu the avatar did. Screens pushed over Home keep theirs, for the back button.
+// the slide-over menu the avatar did. X's navigation ignores setNavigationBarHidden: and the screen's
+// tfn_prefersNavigationBarHidden; it places its Bar itself, and the row of timelines under it follows
+// the bar's bottom edge (as when it collapses on scroll). So on Home the bar is faded out and parked
+// just above the screen. Screens pushed over Home keep it, for the back button.
 static BOOL LBHidesBar(UINavigationController *nav) {
     Class home = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
     return home && [nav.topViewController isKindOfClass:home] && LBSidebarWanted(nav.viewIfLoaded.window);
 }
 
-%group HomeBar
-%hook XNAVNavigationController
-- (void)setNavigationBarHidden:(BOOL)hidden animated:(BOOL)animated {
-    %orig(hidden || LBHidesBar(self), animated);
+static BOOL LBBarOnHome(UINavigationBar *bar) {
+    id delegate = bar.delegate;
+    UINavigationController *nav = [delegate isKindOfClass:UINavigationController.class] ? delegate : nil;
+    for (UIResponder *r = bar.nextResponder; r && !nav; r = r.nextResponder)
+        if ([r isKindOfClass:UINavigationController.class]) nav = (UINavigationController *)r;
+    return nav && LBHidesBar(nav);
 }
-- (void)setNavigationBarHidden:(BOOL)hidden {
-    %orig(hidden || LBHidesBar(self));
-}
-%end
 
-%hook _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController
-// X's navigation asks the top screen whether its bar should show (TFN's tfn_prefersNavigationBarHidden)
-// rather than taking setNavigationBarHidden: from outside.
-- (BOOL)tfn_prefersNavigationBarHidden {
-    return LBSidebarWanted(self.viewIfLoaded.window ?: self.navigationController.viewIfLoaded.window) ? YES : %orig;
+%group HomeBar
+%hook _TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar
+- (void)setAlpha:(CGFloat)alpha {
+    objc_setAssociatedObject(self, kLBWantedAlpha, @(alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(LBBarOnHome(self) ? 0 : alpha);
 }
-- (void)viewDidAppear:(BOOL)animated {
+- (void)layoutSubviews {
     %orig;
-    SEL update = NSSelectorFromString(@"tfn_setNeedsNavigationBarHiddenUpdate");
-    if ([self respondsToSelector:update]) ((void (*)(id, SEL))objc_msgSend)(self, update);
-    UINavigationController *nav = self.navigationController;
-    if (LBHidesBar(nav) && !nav.navigationBarHidden) [nav setNavigationBarHidden:YES animated:NO];
+    [self setAlpha:LBWantedAlpha(self)];
 }
-- (void)viewWillDisappear:(BOOL)animated {
-    %orig;
-    UINavigationController *nav = self.navigationController;
-    if (nav.navigationBarHidden && !LBHidesBar(nav)) [nav setNavigationBarHidden:NO animated:animated];
+- (void)setFrame:(CGRect)frame {
+    if (LBBarOnHome(self)) frame.origin.y = -frame.size.height;
+    %orig(frame);
+}
+- (void)setCenter:(CGPoint)center {
+    if (LBBarOnHome(self)) center.y = -self.bounds.size.height / 2;
+    %orig(center);
 }
 %end
 %end
@@ -669,7 +667,6 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
     if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
-    if (objc_getClass("XNAVNavigationController") &&
-        objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
+    if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar")) %init(HomeBar);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }
