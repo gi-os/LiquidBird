@@ -25,6 +25,7 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 - Finding classes: `nm`/strings miss most of them; dump ObjC metadata (class and category method lists) from the frameworks in the NeoFreeBird IPA (T1Twitter, XServiceLibraries, XAppLibraries hold the app). Navigation: T1TabbedAppNavigationViewController (tabs, `currentTabNavigationController`), T1TabBarViewController (`tabViews`, `setTabBarHidden:withDuration:completion:`), TFNCustomTabBar, TFNFloatingActionButton, T1TabNavigationController (`showComposeFromBarButtonItem:`).
 - No global hooks on `UIView -layoutSubviews`; too hot. `UIControl -didMoveToWindow` is the widest acceptable hook.
 - Never commit IPAs, decrypted binaries, or signing certs. `.gitignore` covers them.
+- The repo is public (free macOS minutes), so the signed IPA (its ad-hoc profile lists the devices) goes up encrypted to the Mac mini: a one-time key encrypted to `artifact-key.pub.pem`, whose private half is only `~/.config/liquidbird/artifact-key.pem` there (`scripts/install_link.sh` decrypts). The unsigned IPA between jobs is NeoFreeBird's public app plus this tweak, and is deleted once signed. Logs must not list devices; a UDID passed as a dispatch input shows in that run.
 - Signing secrets (synced from the gi-os/ios-certs hub) go only to the `sign` job, which runs no third-party code; never pass them to `ipa`. Registered so far: Giovanni's iPhone and iPad; the ad-hoc profile lasts until Sep 2027.
 
 ## Commands

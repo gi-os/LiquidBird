@@ -19,7 +19,8 @@ platform :ios do
     end
 
     devices = Spaceship::ConnectAPI::Device.all.select { |d| d.platform == "IOS" && d.status == "ENABLED" }
-    UI.message("Registered devices: #{devices.empty? ? 'none' : devices.map { |d| "#{d.name} (#{d.device_class}, …#{d.udid.to_s[-4..]})" }.join(', ')}")
+    # Counted, not listed: the repo's logs are public.
+    UI.message("Registered devices: #{devices.count} (#{devices.map(&:device_class).tally.map { |k, v| "#{v} #{k}" }.join(', ')})")
     UI.user_error!("No iPhone or iPad is registered in the developer account, so an ad-hoc build can't install anywhere. Register the device's UDID, then re-run.") if devices.empty?
 
     unless Spaceship::ConnectAPI::BundleId.find(BUNDLE)

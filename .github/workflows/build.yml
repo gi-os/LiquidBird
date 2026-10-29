@@ -99,10 +99,24 @@ jobs:
           command -v fastlane >/dev/null || brew install fastlane
           fastlane adhoc
 
+      # The repo is public, so the signed IPA (it carries the ad-hoc profile, with the devices in it)
+      # goes up encrypted to the Mac mini: a one-time key, itself encrypted to artifact-key.pub.pem, whose
+      # private half only ~/.config/liquidbird/artifact-key.pem there has (scripts/install_link.sh).
+      - name: Encrypt for the Mac mini
+        run: |
+          export LB_KEY="$(/usr/bin/openssl rand -hex 32)"
+          printf '%s' "$LB_KEY" | /usr/bin/openssl pkeyutl -encrypt -pubin -inkey artifact-key.pub.pem \
+            -pkeyopt rsa_padding_mode:oaep -out out/LiquidBird.key.enc
+          /usr/bin/openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:LB_KEY \
+            -in out/LiquidBird.ipa -out out/LiquidBird.ipa.enc
+          rm out/LiquidBird.ipa
+
       - uses: actions/upload-artifact@v4
         with:
           name: LiquidBird-adhoc
-          path: out/LiquidBird.ipa
+          path: |
+            out/LiquidBird.ipa.enc
+            out/LiquidBird.key.enc
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

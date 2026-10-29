@@ -18,6 +18,14 @@ trap cleanup EXIT
 
 gh run download "$RUN" -R "$REPO" -n LiquidBird-adhoc -D "$WWW"
 IPA="$WWW/LiquidBird.ipa"
+# Builds upload it encrypted to this Mac (the repo is public): a one-time key encrypted to
+# artifact-key.pub.pem, whose private half is ~/.config/liquidbird/artifact-key.pem.
+if [[ -f "$IPA.enc" ]]; then
+  LB_KEY="$(/usr/bin/openssl pkeyutl -decrypt -inkey "$HOME/.config/liquidbird/artifact-key.pem" \
+    -pkeyopt rsa_padding_mode:oaep -in "$WWW/LiquidBird.key.enc")" \
+    /usr/bin/openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:LB_KEY -in "$IPA.enc" -out "$IPA"
+  rm "$IPA.enc" "$WWW/LiquidBird.key.enc"
+fi
 VERSION="$(unzip -p "$IPA" 'Payload/*.app/Info.plist' | plutil -extract CFBundleShortVersionString raw -o - -)"
 
 PORT="$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
