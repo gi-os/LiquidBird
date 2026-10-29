@@ -32,6 +32,8 @@
 @interface _TtC11XNavigation10TabBarPill : UIView
 @end
 @interface _TtC11XNavigation25TabBarChromeContainerView : UIView @end
+@interface _TtC21TweetMediaAttachments22MultiMediaCarouselView : UIView @end
+@interface _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView : UIScrollView @end
 @interface _TtC11XNavigation25TabBarAccessoryButtonView : UIView
 @end
 @interface TFNFloatingActionButton : UIView
@@ -834,6 +836,50 @@ static void LBTrimEdgeTreatment(UIView *treatment) {
 %end
 %end
 
+// MARK: - Photo carousels
+
+// A post's photos scroll sideways in a carousel (TweetMediaAttachments' MultiMediaCarouselView) that runs
+// on to the screen's edge, under the Duo's side strip folded: X's timeline doesn't know about the strip
+// (its lists sit in paging cells, which drop the safe area), so the last photo stopped under the sidebar.
+// The carousel scrolls on by as much of it as the strip covers.
+static const void *kLBCarouselSize = &kLBCarouselSize;
+
+static CGFloat LBUnderStrip(UIView *v) {
+    UIWindow *w = v.window;
+    CGFloat strip = LBSideStrip(w);
+    if (!w || strip <= 0) return 0;
+    CGRect inWindow = [v convertRect:v.bounds toView:nil];
+    return MAX(0, round(CGRectGetMaxX(inWindow) - (w.bounds.size.width - strip)));
+}
+
+static void LBRefitCarousel(UIScrollView *scroll) {
+    NSValue *size = objc_getAssociatedObject(scroll, kLBCarouselSize);
+    if (size) scroll.contentSize = size.CGSizeValue;   // through the hook below, with what's under the strip
+}
+
+%group Carousel
+%hook _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView
+- (void)setContentSize:(CGSize)size {
+    objc_setAssociatedObject(self, kLBCarouselSize, [NSValue valueWithCGSize:size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (size.width > self.bounds.size.width) size.width += LBUnderStrip(self);
+    if (!CGSizeEqualToSize(self.contentSize, size)) %orig(size);
+}
+- (void)didMoveToWindow {
+    %orig;
+    LBRefitCarousel(self);
+}
+%end
+
+%hook _TtC21TweetMediaAttachments22MultiMediaCarouselView
+- (void)layoutSubviews {
+    %orig;
+    Class scroll = objc_getClass("_TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView");
+    for (UIView *v in self.subviews)
+        if ([v isKindOfClass:scroll]) LBRefitCarousel((UIScrollView *)v);
+}
+%end
+%end
+
 // MARK: - Scroll edge effects
 
 // iOS 26 blurs a scroll view's edge where a bar sits over it. With the tab bar replaced by the sidebar,
@@ -985,6 +1031,8 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
     if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
     if (objc_getClass("_TtC11XNavigation25TabBarChromeContainerView")) %init(TabBarChrome);
+    if (objc_getClass("_TtC21TweetMediaAttachments22MultiMediaCarouselView") &&
+        objc_getClass("_TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView")) %init(Carousel);
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
