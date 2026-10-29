@@ -39,6 +39,8 @@
 @end
 @interface _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController : UIViewController
 @end
+@interface T1HostViewController : UIViewController
+@end
 
 static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
 static const CGFloat LBMinimumColumnWidth = 400;
@@ -713,6 +715,22 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 %end
 %end
 
+// MARK: - Folded, upright
+
+// Folded, the feed stays upright. The Duo's two poses are different displays (466pt across folded,
+// about 669pt unfolded), so the screen, not the window, says which: turning the phone doesn't change it.
+// The app's root decides for everything that isn't presented over it, so a photo can still turn.
+%group Orientation
+%hook T1HostViewController
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    UIScreen *screen = self.viewIfLoaded.window.windowScene.screen;
+    if (screen && MIN(screen.bounds.size.width, screen.bounds.size.height) < LBSidebarWindow)
+        return UIInterfaceOrientationMaskPortrait;
+    return %orig;
+}
+%end
+%end
+
 %ctor {
     // TFNFloatingActionButton rides in the GlassTabBar group: it's there either way.
     if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
@@ -721,5 +739,6 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
+    if (objc_getClass("T1HostViewController")) %init(Orientation);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }
