@@ -17,6 +17,13 @@ static void LBDumpView(UIView *v, NSInteger depth, NSMutableString *out, NSInteg
     if (v.hidden) [out appendString:@" hidden"];
     if (v.alpha < 0.99) [out appendFormat:@" a=%.2f", v.alpha];
     if (v.accessibilityIdentifier.length) [out appendFormat:@" id=%@", v.accessibilityIdentifier];
+    if ([v isKindOfClass:UIScrollView.class]) {
+        UIScrollView *sv = (UIScrollView *)v;
+        [out appendFormat:@" offset=%@ inset=%@ adjusted=%@", NSStringFromCGPoint(sv.contentOffset),
+                          NSStringFromUIEdgeInsets(sv.contentInset), NSStringFromUIEdgeInsets(sv.adjustedContentInset)];
+    }
+    if ([v.nextResponder isKindOfClass:UIViewController.class])
+        [out appendFormat:@" safe=%@", NSStringFromUIEdgeInsets(v.safeAreaInsets)];
     if (([v isKindOfClass:UIControl.class] || v.isAccessibilityElement) && v.accessibilityLabel.length)
         [out appendFormat:@" label=%@", [v.accessibilityLabel substringToIndex:MIN(v.accessibilityLabel.length, (NSUInteger)40)]];
     [out appendString:@"\n"];
@@ -26,8 +33,9 @@ static void LBDumpView(UIView *v, NSInteger depth, NSMutableString *out, NSInteg
 
 static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutableString *out) {
     UIView *v = vc.viewIfLoaded;
-    [out appendFormat:@"%@%@ view=%@ %@\n", LBPad(depth), NSStringFromClass(vc.class),
-                      v ? NSStringFromClass(v.class) : @"-", v ? NSStringFromCGRect(v.frame) : @""];
+    [out appendFormat:@"%@%@ view=%@ %@ additionalSafe=%@\n", LBPad(depth), NSStringFromClass(vc.class),
+                      v ? NSStringFromClass(v.class) : @"-", v ? NSStringFromCGRect(v.frame) : @"",
+                      NSStringFromUIEdgeInsets(vc.additionalSafeAreaInsets)];
     for (UIViewController *c in vc.childViewControllers) LBDumpViewController(c, depth + 1, out);
     UIViewController *p = vc.presentedViewController;
     if (p && p.presentingViewController == vc) {

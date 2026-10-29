@@ -528,9 +528,9 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
 // the slide-over menu the avatar did. X's navigation ignores setNavigationBarHidden: and the screen's
-// tfn_prefersNavigationBarHidden; it places its Bar itself, and the row of timelines under it follows
-// the bar's bottom edge (as when it collapses on scroll). So on Home the bar is faded out and parked
-// just above the screen. Screens pushed over Home keep it, for the back button.
+// tfn_prefersNavigationBarHidden, and places its Bar itself (overriding frame and center), so on Home
+// the bar is faded out. (Moving the timelines row up into its place is still to come.) Screens pushed
+// over Home keep it, for the back button.
 static BOOL LBHidesBar(UINavigationController *nav) {
     Class home = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
     return home && [nav.topViewController isKindOfClass:home] && LBSidebarWanted(nav.viewIfLoaded.window);
@@ -554,13 +554,29 @@ static BOOL LBBarOnHome(UINavigationBar *bar) {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
 }
-- (void)setFrame:(CGRect)frame {
-    if (LBBarOnHome(self)) frame.origin.y = -frame.size.height;
-    %orig(frame);
+%end
+%end
+
+// MARK: - Scroll edge effects
+
+// iOS 26 blurs a scroll view's edge where a bar sits over it. With the tab bar replaced by the sidebar,
+// nothing sits over the bottom; on Home, nothing over the top either.
+static BOOL LBInsideHome(UIView *v) {
+    Class home = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
+    for (; v && home; v = v.superview)
+        if ([v.nextResponder isKindOfClass:home]) return YES;
+    return NO;
 }
-- (void)setCenter:(CGPoint)center {
-    if (LBBarOnHome(self)) center.y = -self.bounds.size.height / 2;
-    %orig(center);
+
+%group EdgeEffects
+%hook UIScrollView
+- (void)didMoveToWindow {
+    %orig;
+    if (@available(iOS 26, *)) {
+        if (!LBSidebarWanted(self.window)) return;
+        self.bottomEdgeEffect.hidden = YES;
+        if (LBInsideHome(self)) self.topEdgeEffect.hidden = YES;
+    }
 }
 %end
 %end
@@ -668,5 +684,6 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
     if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar")) %init(HomeBar);
+    %init(EdgeEffects);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }
