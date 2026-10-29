@@ -552,6 +552,7 @@ static BOOL LBBarOnHome(UINavigationBar *bar) {
 }
 
 static const void *kLBHomeShift = &kLBHomeShift;
+static const void *kLBHomeRowBottom = &kLBHomeRowBottom;
 
 static void LBShiftHome(UIViewController *home) {
     UIView *view = home.viewIfLoaded, *container = view.superview;
@@ -568,10 +569,29 @@ static void LBShiftHome(UIViewController *home) {
             objc_setAssociatedObject(home, kLBHomeShift, @(shift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     }
+    BOOL hide = LBHidesBar(home.navigationController);
     CGRect bounds = container.bounds;
-    CGRect frame = LBHidesBar(home.navigationController)
-        ? CGRectMake(0, -shift, bounds.size.width, bounds.size.height + shift) : bounds;
+    CGRect frame = hide ? CGRectMake(0, -shift, bounds.size.width, bounds.size.height + shift) : bounds;
     if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
+
+    // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
+    // 68pt on the Duo), so the first tweet started under the row. The timelines' pager (Home's first
+    // child) gets the difference, up to the row's bottom with the row shown.
+    CGFloat rowBottom = [objc_getAssociatedObject(home, kLBHomeRowBottom) doubleValue];
+    for (UIView *v in view.subviews)
+        if (row && [v isKindOfClass:row] && CGRectGetMaxY(v.frame) > rowBottom && CGRectGetMaxY(v.frame) < 260) {
+            rowBottom = CGRectGetMaxY(v.frame);
+            objc_setAssociatedObject(home, kLBHomeRowBottom, @(rowBottom), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    UIViewController *pager = nil;
+    for (UIViewController *c in home.childViewControllers)
+        if ([NSStringFromClass(c.class) rangeOfString:@"SegmentedViewController"].location != NSNotFound) pager = c;
+    if (!pager) return;
+    CGFloat extra = hide ? MAX(0, round(rowBottom - view.safeAreaInsets.top)) : 0;
+    UIEdgeInsets insets = pager.additionalSafeAreaInsets;
+    if (fabs(insets.top - extra) < 0.5) return;
+    insets.top = extra;
+    pager.additionalSafeAreaInsets = insets;
 }
 
 %group HomeBar
