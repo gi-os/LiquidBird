@@ -42,6 +42,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     UINavigationController *nav = xnav ? [[xnav alloc] initWithNavigationBarClass:bar toolbarClass:nil]
                                        : [[UINavigationController alloc] init];
     [nav setViewControllers:@[vc] animated:NO];
+    nav.view.accessibilityIdentifier = @"LBColumn";   // Tiling.x keeps a column's bar (its ✕)
     return nav;
 }
 

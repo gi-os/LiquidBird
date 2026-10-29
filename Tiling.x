@@ -41,6 +41,10 @@
 @end
 @interface T1HostViewController : UIViewController
 @end
+@interface T1ConversationContainerViewController : UIViewController
+@end
+@interface _TtC13XDesignSystem19ScrollEdgeTreatment : UIView
+@end
 
 static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
 static const CGFloat LBMinimumColumnWidth = 400;
@@ -528,7 +532,7 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 %end
 %end
 
-// MARK: - Home's top bar
+// MARK: - Home's and an opened tweet's top bar
 
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
 // the slide-over menu the avatar did. X's navigation ignores setNavigationBarHidden: and the screen's
@@ -538,9 +542,15 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 // (where X puts that row, less a small margin) and grows by as much at the bottom: the row comes to the
 // top and the first tweet stays right under it. Screens pushed over Home keep their bar, for the back
 // button.
+// The screens whose bar goes where the sidebar shows: Home (avatar and bird) and an opened tweet (just
+// "Tweet"; back is the left-edge swipe, or Home in the sidebar). Not in a column, whose bar holds its ✕.
 static BOOL LBHidesBar(UINavigationController *nav) {
+    if (!LBSidebarWanted(nav.viewIfLoaded.window)) return NO;
+    if ([nav.viewIfLoaded.accessibilityIdentifier isEqualToString:@"LBColumn"]) return NO;
+    UIViewController *top = nav.topViewController;
     Class home = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
-    return home && [nav.topViewController isKindOfClass:home] && LBSidebarWanted(nav.viewIfLoaded.window);
+    Class tweet = objc_getClass("T1ConversationContainerViewController");
+    return (home && [top isKindOfClass:home]) || (tweet && [top isKindOfClass:tweet]);
 }
 
 static BOOL LBBarOnHome(UINavigationBar *bar) {
@@ -598,6 +608,68 @@ static void LBShiftHome(UIViewController *home) {
     insets.top = extra;
     pager.additionalSafeAreaInsets = insets;
 }
+
+// An opened tweet with its bar hidden starts at the top: its safe area (the bar's height) is taken back.
+static const void *kLBTweetLifted = &kLBTweetLifted;
+
+static void LBLiftTweet(UIViewController *tweet) {
+    UINavigationController *nav = tweet.navigationController;
+    BOOL lift = nav.topViewController == tweet && LBHidesBar(nav);
+    BOOL lifted = [objc_getAssociatedObject(tweet, kLBTweetLifted) boolValue];
+    if (!lift && !lifted) return;
+    UIEdgeInsets extra = tweet.additionalSafeAreaInsets;
+    CGFloat base = tweet.view.safeAreaInsets.top - extra.top;
+    CGFloat want = lift ? round(8 - base) : 0;
+    objc_setAssociatedObject(tweet, kLBTweetLifted, @(lift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (fabs(extra.top - want) < 0.5) return;
+    extra.top = want;
+    tweet.additionalSafeAreaInsets = extra;
+}
+
+// X's own blur at a list's edges (XDesignSystem's ScrollEdgeTreatment: a blur along the top, one along the
+// bottom). Where the sidebar shows there's no tab bar for the bottom one to sit under, and the top one
+// goes on the screens whose bar is hidden.
+static void LBTrimEdgeTreatment(UIView *treatment) {
+    UIWindow *w = treatment.window;
+    BOOL side = LBSidebarWanted(w);
+    UIResponder *r = treatment.nextResponder;
+    while (r && ![r isKindOfClass:UIViewController.class]) r = r.nextResponder;
+    UINavigationController *nav = ((UIViewController *)r).navigationController;
+    BOOL barHidden = side && nav && LBHidesBar(nav);
+    Class blur = objc_getClass("XDSBlur");
+    CGFloat mid = treatment.bounds.size.height / 2;
+    for (UIView *v in treatment.subviews) {
+        if (!blur || ![v isKindOfClass:blur]) continue;
+        BOOL bottom = CGRectGetMidY(v.frame) > mid;
+        v.hidden = bottom ? side : barHidden;
+    }
+}
+
+%group EdgeTreatment
+%hook _TtC13XDesignSystem19ScrollEdgeTreatment
+- (void)layoutSubviews {
+    %orig;
+    LBTrimEdgeTreatment(self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    LBTrimEdgeTreatment(self);
+}
+%end
+%end
+
+%group TweetBar
+%hook T1ConversationContainerViewController
+- (void)viewDidLayoutSubviews {
+    %orig;
+    LBLiftTweet(self);
+}
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    LBLiftTweet(self);
+}
+%end
+%end
 
 %group HomeBar
 %hook _TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController
@@ -764,6 +836,8 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
+    if (objc_getClass("_TtC13XDesignSystem19ScrollEdgeTreatment")) %init(EdgeTreatment);
+    if (objc_getClass("T1ConversationContainerViewController")) %init(TweetBar);
     if (objc_getClass("T1HostViewController")) %init(Orientation);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }
