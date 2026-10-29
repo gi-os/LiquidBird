@@ -62,6 +62,7 @@ static const void *kLBGlassTabBar = &kLBGlassTabBar;
 static const void *kLBWantedAlpha = &kLBWantedAlpha;
 static const void *kLBTiled = &kLBTiled;
 static const void *kLBSideStrip = &kLBSideStrip;
+void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
 // The strip down the trailing edge the Duo's status bar runs in (a safe area on that side only), or 0.
 // Hiding the status bar (the media viewer, the slide-over menu) takes the strip's inset away with it, so
@@ -148,7 +149,6 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 // MARK: - The sidebar
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
-void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
 NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 full width, 1 right
 void LBCSetFeedPosition(NSInteger side);
