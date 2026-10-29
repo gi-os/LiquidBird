@@ -1,16 +1,19 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// Twitter for iPad's layout on a wide window (the iPhone Duo unfolded), after gi-os/twitter's
-// TabStackView and ClassicSidebar, in Liquid Glass: down the strip the status bar runs in on the
-// trailing edge, a glass compose button under the status bar and a glass rail of the tabs at the
-// bottom, in place of the tab bar and the floating compose button; the current tab is a column card
-// centred on a backdrop. Narrow windows stay stock. Step 1 of 2; step 2 opens tweets, profiles and
-// links as further columns.
+// Twitter for iPad's layout on the iPhone Duo's wide poses, after gi-os/twitter's TabStackView and
+// ClassicSidebar, in Liquid Glass. A glass rail of the tabs runs down the strip the status bar sits
+// in on the trailing edge, between the status bar and X's own compose button, in place of the tab
+// bar; where there's room for two columns, the current tab is a column card centred on a backdrop.
+// Narrow windows (folded) stay stock. Step 1 of 2; step 2 opens tweets, profiles and links as
+// further columns.
+//
+// The rail mirrors whichever tab bar the app is using: X's Liquid Glass one (XNavigation's
+// TabBarView of TabBarItemViews, which select on accessibilityActivate, as VoiceOver does) or the
+// older T1TabBarViewController (tabViews, selected through its delegate, as a tap is).
 
 @interface T1TabbedAppNavigationViewController : UIViewController
 - (UIViewController *)selectedViewController;
-- (UINavigationController *)currentTabNavigationController;
 - (void)tabBarViewController:(id)tabBarViewController selectTabAtIndex:(NSInteger)index withView:(UIView *)view;
 @end
 
@@ -21,27 +24,27 @@
 - (void)setTabBarHidden:(BOOL)hidden withDuration:(double)duration completion:(id)completion;
 @end
 
-@interface T1TabNavigationController : UINavigationController
-- (void)showComposeFromBarButtonItem:(UIBarButtonItem *)item;
+@interface _TtC11XNavigation10TabBarView : UIView
+@end
+@interface _TtC11XNavigation10TabBarPill : UIView
 @end
 
-@interface TFNFloatingActionButton : UIView
-@end
-
-// gi-os/twitter's ColumnLayout width; corners and sizes in Liquid Glass proportions.
-static const CGFloat LBColumnWidth = 476;
+static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
+static const CGFloat LBMinimumColumnWidth = 400;
 static const CGFloat LBCardRadius = 26;
-static const CGFloat LBWideWindow = 700;
+static const CGFloat LBSidebarWindow = 600;        // wider than any iPhone held upright: the Duo's poses
 static const CGFloat LBGlassWidth = 52;
-// Where iPhone Duo's status bar runs down the side, its centre line sits this far in from the edge.
-static const CGFloat LBStatusCentreDefault = 50;
+static const CGFloat LBRow = 48;
+// Where the status bar runs down the side and the safe area doesn't say how wide its strip is.
+static const CGFloat LBStripDefault = 100;
 
-static BOOL LBWide(UIView *v) {
-    UIWindow *w = v.window;
-    return w && w.bounds.size.width >= LBWideWindow;
-}
+static const void *kLBSidebar = &kLBSidebar;
+static const void *kLBGlassTabBar = &kLBGlassTabBar;
+static const void *kLBCompose = &kLBCompose;
+static const void *kLBWantedAlpha = &kLBWantedAlpha;
+static const void *kLBTiled = &kLBTiled;
 
-static UIColor *LBBackdrop(void) { return [UIColor colorWithRed:0.05 green:0.055 blue:0.065 alpha:1]; }
+static BOOL LBSidebarWanted(UIWindow *w) { return w && w.bounds.size.width >= LBSidebarWindow; }
 
 static UIVisualEffectView *LBGlassView(UIColor *tint) {
     UIVisualEffect *effect;
@@ -58,7 +61,7 @@ static UIVisualEffectView *LBGlassView(UIColor *tint) {
     return v;
 }
 
-// The largest image a tab view shows, for the sidebar's copy of that tab.
+// The largest image a tab shows, for the rail's copy of that tab.
 static UIImage *LBTabImage(UIView *tab) {
     UIImage *best = nil;
     CGFloat area = 0;
@@ -87,88 +90,60 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
     return [UIImage systemImageNamed:name withConfiguration:c] ?: [UIImage systemImageNamed:@"circle" withConfiguration:c];
 }
 
+// MARK: - The rail
+
 @interface LBSidebar : UIView
-@property (nonatomic, weak) T1TabbedAppNavigationViewController *nav;
-@property (nonatomic, weak) T1TabBarViewController *tabBar;
-@property (nonatomic) CGFloat topInset;
-- (void)reloadTabs;
+@property (nonatomic) CGFloat top;       // under the status bar
+@property (nonatomic) CGFloat bottom;    // above the compose button
+- (void)setTabs:(NSArray<UIView *> *)tabs selected:(NSInteger)selected activate:(void (^)(NSInteger))activate;
 @end
 
 @implementation LBSidebar {
-    UIVisualEffectView *_composeGlass;
-    UIButton *_compose;
     UIVisualEffectView *_rail;
-    NSMutableArray<UIButton *> *_tabs;
+    NSMutableArray<UIButton *> *_buttons;
+    void (^_activate)(NSInteger);
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = UIColor.clearColor;
-        _composeGlass = LBGlassView([UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1]);
-        [self addSubview:_composeGlass];
-        _compose = [UIButton buttonWithType:UIButtonTypeSystem];
-        UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
-        [_compose setImage:[UIImage systemImageNamed:@"square.and.pencil" withConfiguration:c] forState:UIControlStateNormal];
-        _compose.tintColor = UIColor.whiteColor;
-        _compose.accessibilityLabel = @"New Tweet";
-        [_compose addTarget:self action:@selector(composeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [_composeGlass.contentView addSubview:_compose];
         _rail = LBGlassView(nil);
         [self addSubview:_rail];
-        _tabs = [NSMutableArray array];
+        _buttons = [NSMutableArray array];
     }
     return self;
 }
 
-// Only the glass takes touches; the strip around it is the content's.
+// Only the glass takes touches; the strip around it stays the app's.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return CGRectContainsPoint(_composeGlass.frame, point) || (!_rail.hidden && CGRectContainsPoint(_rail.frame, point));
+    return !_rail.hidden && CGRectContainsPoint(_rail.frame, point);
 }
 
-- (void)composeTapped {
-    T1TabbedAppNavigationViewController *nav = self.nav;
-    id tabNav = [nav respondsToSelector:@selector(currentTabNavigationController)] ? [nav currentTabNavigationController] : nil;
-    if ([tabNav respondsToSelector:@selector(showComposeFromBarButtonItem:)]) {
-        UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose target:nil action:nil];
-        [tabNav showComposeFromBarButtonItem:item];
-    }
+- (void)tapped:(UIButton *)b {
+    if (_activate) _activate(b.tag);
 }
 
-- (void)tabTapped:(UIButton *)b {
-    T1TabBarViewController *tb = self.tabBar;
-    NSArray<UIView *> *views = [tb respondsToSelector:@selector(tabViews)] ? [tb tabViews] : nil;
-    if (b.tag < 0 || b.tag >= (NSInteger)views.count) return;
-    // As the tab bar does on a tap, so reselecting still scrolls to the top.
-    id target = [tb respondsToSelector:@selector(delegate)] ? [tb delegate] : nil;
-    if (![target respondsToSelector:@selector(tabBarViewController:selectTabAtIndex:withView:)]) target = self.nav;
-    if ([target respondsToSelector:@selector(tabBarViewController:selectTabAtIndex:withView:)])
-        [target tabBarViewController:tb selectTabAtIndex:b.tag withView:views[b.tag]];
-    [self reloadTabs];
-}
-
-- (void)reloadTabs {
-    T1TabBarViewController *tb = self.tabBar;
-    NSArray<UIView *> *views = [tb respondsToSelector:@selector(tabViews)] ? [tb tabViews] : @[];
-    NSInteger selected = [tb respondsToSelector:@selector(selectedTabIndex)] ? [tb selectedTabIndex] : -1;
-    while (_tabs.count > views.count) { [_tabs.lastObject removeFromSuperview]; [_tabs removeLastObject]; }
-    while (_tabs.count < views.count) {
+- (void)setTabs:(NSArray<UIView *> *)tabs selected:(NSInteger)selected activate:(void (^)(NSInteger))activate {
+    _activate = [activate copy];
+    while (_buttons.count > tabs.count) { [_buttons.lastObject removeFromSuperview]; [_buttons removeLastObject]; }
+    while (_buttons.count < tabs.count) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.layer.cornerCurve = kCACornerCurveContinuous;
-        [b addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [b addTarget:self action:@selector(tapped:) forControlEvents:UIControlEventTouchUpInside];
         [_rail.contentView addSubview:b];
-        [_tabs addObject:b];
+        [_buttons addObject:b];
     }
-    for (NSUInteger i = 0; i < views.count; i++) {
-        UIButton *b = _tabs[i];
+    for (NSUInteger i = 0; i < tabs.count; i++) {
+        UIButton *b = _buttons[i];
         BOOL on = (NSInteger)i == selected;
-        UIImage *img = LBTabImage(views[i]) ?: LBFallbackImage(views[i].accessibilityLabel, on);
+        UIImage *img = LBTabImage(tabs[i]) ?: LBFallbackImage(tabs[i].accessibilityLabel, on);
         b.tag = (NSInteger)i;
         [b setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
         b.imageView.contentMode = UIViewContentModeScaleAspectFit;
         b.tintColor = on ? UIColor.whiteColor : [UIColor colorWithWhite:0.62 alpha:1];
         // The selected tab sits on a lighter lozenge inside the rail, as in the system's glass tab bar.
         b.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.16] : UIColor.clearColor;
-        b.accessibilityLabel = views[i].accessibilityLabel;
+        b.accessibilityLabel = tabs[i].accessibilityLabel;
         b.selected = on;
     }
     [self setNeedsLayout];
@@ -176,28 +151,158 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGSize s = self.bounds.size;
-    CGFloat x = round((s.width - LBGlassWidth) / 2);
-    _composeGlass.frame = CGRectMake(x, self.topInset, LBGlassWidth, LBGlassWidth);
-    _composeGlass.layer.cornerRadius = LBGlassWidth / 2;
-    _compose.frame = _composeGlass.contentView.bounds;
-    CGFloat row = 48, pad = 4;
-    CGFloat railHeight = _tabs.count * row + 2 * pad;
-    CGFloat bottom = s.height - MAX(self.safeAreaInsets.bottom, 12);
-    _rail.hidden = _tabs.count == 0;
-    _rail.frame = CGRectMake(x, bottom - railHeight, LBGlassWidth, railHeight);
+    CGFloat pad = 4;
+    CGFloat height = _buttons.count * LBRow + 2 * pad;
+    CGFloat room = self.bottom - self.top;
+    // Centred between the status bar and compose, or from the top when that's all the room there is.
+    CGFloat y = room > height ? self.top + round((room - height) / 2) : self.top;
+    _rail.hidden = _buttons.count == 0;
+    _rail.frame = CGRectMake(round((self.bounds.size.width - LBGlassWidth) / 2), y, LBGlassWidth, height);
     _rail.layer.cornerRadius = LBGlassWidth / 2;
-    for (NSUInteger i = 0; i < _tabs.count; i++) {
-        UIButton *b = _tabs[i];
-        b.frame = CGRectMake(pad, pad + i * row, LBGlassWidth - 2 * pad, row);
+    for (NSUInteger i = 0; i < _buttons.count; i++) {
+        UIButton *b = _buttons[i];
+        b.frame = CGRectMake(pad, pad + i * LBRow, LBGlassWidth - 2 * pad, LBRow);
         b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
     }
 }
 @end
 
-static const void *kLBTiled = &kLBTiled;
-static const void *kLBSidebar = &kLBSidebar;
-static const void *kLBFABWantsHidden = &kLBFABWantsHidden;
+// MARK: - Placing it
+
+static UIView *LBFind(UIView *v, Class cls, NSInteger depth) {
+    if (!cls || depth > 30) return nil;
+    if ([v isKindOfClass:cls]) return v;
+    if ([v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class]) return nil;
+    for (UIView *s in v.subviews) {
+        UIView *r = LBFind(s, cls, depth + 1);
+        if (r) return r;
+    }
+    return nil;
+}
+
+// The strip down the trailing edge: the safe area there, which the status bar's strip is, or a default.
+static CGFloat LBStripWidth(UIView *host) {
+    CGFloat r = host.safeAreaInsets.right;
+    return r >= 40 ? r : LBStripDefault;
+}
+
+// Under the status bar where it runs down the side (iPhone Duo), else under the top safe area.
+static CGFloat LBStatusBottom(UIView *host) {
+    CGRect sb = [host convertRect:host.window.windowScene.statusBarManager.statusBarFrame fromView:nil];
+    if (!CGRectIsEmpty(sb) && CGRectGetMinX(sb) > host.bounds.size.width / 2) return CGRectGetMaxY(sb) + 16;
+    if (host.safeAreaInsets.right > 0 && host.safeAreaInsets.top < 1) return 232;
+    return host.safeAreaInsets.top + 16;
+}
+
+// X's compose button where it sits in the strip, looked up again only when the one found has gone.
+static CGFloat LBComposeTop(UIWindow *w, UIView *host, CGFloat strip) {
+    CGFloat fallback = host.bounds.size.height - MAX(host.safeAreaInsets.bottom, 12) - 96;
+    UIView *compose = [objc_getAssociatedObject(w, kLBCompose) nonretainedObjectValue];
+    if (!compose || compose.window != w) {
+        compose = nil;
+        for (NSString *name in @[@"TFNFloatingActionButton", @"_TtC11XNavigation25TabBarAccessoryButtonView"]) {
+            compose = LBFind(host, objc_getClass(name.UTF8String), 0);
+            if (compose) break;
+        }
+        objc_setAssociatedObject(w, kLBCompose, compose ? [NSValue valueWithNonretainedObject:compose] : nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!compose || compose.hidden || compose.alpha < 0.01) return fallback;
+    CGRect f = [host convertRect:compose.bounds fromView:compose];
+    if (CGRectGetMidX(f) < host.bounds.size.width - strip) return fallback;
+    return CGRectGetMinY(f) - 16;
+}
+
+static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger selected, void (^activate)(NSInteger)) {
+    LBSidebar *bar = objc_getAssociatedObject(w, kLBSidebar);
+    UIView *host = w.rootViewController.viewIfLoaded;
+    if (!host || !LBSidebarWanted(w) || tabs.count == 0) { [bar removeFromSuperview]; return; }
+    if (!bar) {
+        bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
+        objc_setAssociatedObject(w, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat strip = LBStripWidth(host);
+    if (bar.superview != host) [host addSubview:bar];
+    [host bringSubviewToFront:bar];
+    bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
+    bar.top = LBStatusBottom(host);
+    bar.bottom = LBComposeTop(w, host, strip);
+    [bar setTabs:tabs selected:selected activate:activate];
+}
+
+// MARK: - X's Liquid Glass tab bar
+
+static NSArray<UIView *> *LBGlassTabs(UIView *tabBar) {
+    NSMutableArray<UIView *> *tabs = [NSMutableArray array];
+    Class item = objc_getClass("_TtC11XNavigation14TabBarItemView");
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithArray:tabBar.subviews];
+    while (queue.count && item) {
+        UIView *v = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if ([v isKindOfClass:item]) [tabs addObject:v];
+        else [queue addObjectsFromArray:v.subviews];
+    }
+    [tabs sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+        CGFloat ax = [tabBar convertPoint:CGPointZero fromView:a].x, bx = [tabBar convertPoint:CGPointZero fromView:b].x;
+        return ax < bx ? NSOrderedAscending : ax > bx ? NSOrderedDescending : NSOrderedSame;
+    }];
+    return tabs;
+}
+
+// X's tab bar fades out while the rail stands in for it; the alpha the app asks for is kept for when
+// the window narrows again. (Faded below 0.01, it takes no touches either.)
+static CGFloat LBWantedAlpha(UIView *v) {
+    NSNumber *n = objc_getAssociatedObject(v, kLBWantedAlpha);
+    return n ? n.doubleValue : 1;
+}
+
+static CGFloat LBBarAlpha(UIView *v, CGFloat wanted) {
+    objc_setAssociatedObject(v, kLBWantedAlpha, @(wanted), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return LBSidebarWanted(v.window) ? 0 : wanted;
+}
+
+static void LBSyncGlassTabBar(UIView *tabBar) {
+    UIWindow *w = tabBar.window;
+    if (!w) return;
+    objc_setAssociatedObject(w, kLBGlassTabBar, [NSValue valueWithNonretainedObject:tabBar], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSArray<UIView *> *tabs = LBGlassTabs(tabBar);
+    NSInteger selected = -1;
+    for (NSUInteger i = 0; i < tabs.count; i++)
+        if (tabs[i].accessibilityTraits & UIAccessibilityTraitSelected) { selected = (NSInteger)i; break; }
+    __weak UIView *weakBar = tabBar;
+    LBUpdateSidebar(w, tabs, selected, ^(NSInteger i) {
+        NSArray<UIView *> *now = LBGlassTabs(weakBar);
+        if (i < (NSInteger)now.count) [now[i] accessibilityActivate];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakBar setNeedsLayout];
+        });
+    });
+}
+
+%group GlassTabBar
+%hook _TtC11XNavigation10TabBarView
+- (void)layoutSubviews {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+    LBSyncGlassTabBar(self);
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(LBBarAlpha(self, alpha));
+}
+%end
+
+%hook _TtC11XNavigation10TabBarPill
+- (void)layoutSubviews {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(LBBarAlpha(self, alpha));
+}
+%end
+%end
+
+// MARK: - The older tab bar, and the column card
 
 static UIViewController *LBChild(UIViewController *vc, Class cls, NSInteger depth) {
     if (!cls || depth > 4) return nil;
@@ -209,77 +314,65 @@ static UIViewController *LBChild(UIViewController *vc, Class cls, NSInteger dept
     return nil;
 }
 
-static void LBRefreshFABs(UIView *v, Class fab) {
-    if ([v isKindOfClass:fab]) { v.hidden = [objc_getAssociatedObject(v, kLBFABWantsHidden) boolValue]; return; }
-    for (UIView *s in v.subviews) LBRefreshFABs(s, fab);
-}
+static UIColor *LBBackdrop(void) { return [UIColor colorWithRed:0.05 green:0.055 blue:0.065 alpha:1]; }
 
-// Under the status bar where it runs down the side (iPhone Duo), else under the top safe area.
-static CGFloat LBSidebarTop(UIView *root) {
-    CGRect sb = [root convertRect:root.window.windowScene.statusBarManager.statusBarFrame fromView:nil];
-    if (!CGRectIsEmpty(sb) && CGRectGetMinX(sb) > root.bounds.size.width / 2) return CGRectGetMaxY(sb) + 12;
-    if (root.safeAreaInsets.right > 0 && root.safeAreaInsets.top < 1) return 232;
-    return root.safeAreaInsets.top + 12;
-}
-
-// How far in from the trailing edge the status bar's centre line runs, where it runs down the side.
-static CGFloat LBStatusCentreInset(UIView *root) {
-    CGRect sb = [root convertRect:root.window.windowScene.statusBarManager.statusBarFrame fromView:nil];
-    if (!CGRectIsEmpty(sb) && CGRectGetMinX(sb) > root.bounds.size.width / 2 && sb.size.height > sb.size.width)
-        return root.bounds.size.width - CGRectGetMidX(sb);
-    return LBStatusCentreDefault;
+static void LBUncard(UIView *card) {
+    if (card.layer.cornerRadius != LBCardRadius) return;
+    card.layer.cornerRadius = 0;
+    card.layer.masksToBounds = NO;
+    card.layer.borderWidth = 0;
+    if (card.superview) card.frame = card.superview.bounds;
 }
 
 static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     UIView *root = nav.viewIfLoaded;
-    if (!root.window) return;
-    BOOL wide = LBWide(root);
+    UIWindow *w = root.window;
+    if (!w) return;
+    BOOL side = LBSidebarWanted(w);
     BOOL was = [objc_getAssociatedObject(nav, kLBTiled) boolValue];
     T1TabBarViewController *tb = (T1TabBarViewController *)LBChild(nav, objc_getClass("T1TabBarViewController"), 0);
-    UIViewController *selected = [nav respondsToSelector:@selector(selectedViewController)] ? [nav selectedViewController] : nil;
-    UIView *card = selected.viewIfLoaded;
-    LBSidebar *bar = objc_getAssociatedObject(nav, kLBSidebar);
+    UIViewController *selectedVC = [nav respondsToSelector:@selector(selectedViewController)] ? [nav selectedViewController] : nil;
+    UIView *card = selectedVC.viewIfLoaded;
+    // With X's glass tab bar in this window, that drives the rail.
+    BOOL glass = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue] != nil;
 
-    if (wide != was) {
-        objc_setAssociatedObject(nav, kLBTiled, @(wide), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if ([tb respondsToSelector:@selector(setTabBarHidden:withDuration:completion:)])
-            [tb setTabBarHidden:wide withDuration:0 completion:nil];
-        Class fab = objc_getClass("TFNFloatingActionButton");
-        if (fab) LBRefreshFABs(root, fab);
-        if (!wide) {
-            [bar removeFromSuperview];
-            for (UIViewController *c in nav.childViewControllers) {
-                UIView *v = c.viewIfLoaded;
-                if (v.layer.cornerRadius == LBCardRadius) { v.layer.cornerRadius = 0; v.layer.masksToBounds = NO; v.layer.borderWidth = 0; }
-            }
-            if (card.superview) card.frame = card.superview.bounds;
-        }
+    if (side != was) {
+        objc_setAssociatedObject(nav, kLBTiled, @(side), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!glass && [tb respondsToSelector:@selector(setTabBarHidden:withDuration:completion:)])
+            [tb setTabBarHidden:side withDuration:0 completion:nil];
+        if (!side) LBUncard(card);
     }
-    if (!wide) return;
+    if (!side) return;
 
-    CGFloat sidebarWidth = 2 * LBStatusCentreInset(root);
-    if (!bar) {
-        bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
-        objc_setAssociatedObject(nav, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!glass) {
+        NSArray<UIView *> *tabs = [tb respondsToSelector:@selector(tabViews)] ? [tb tabViews] : @[];
+        NSInteger selected = [tb respondsToSelector:@selector(selectedTabIndex)] ? [tb selectedTabIndex] : -1;
+        __weak T1TabBarViewController *weakTB = tb;
+        __weak T1TabbedAppNavigationViewController *weakNav = nav;
+        LBUpdateSidebar(w, tabs, selected, ^(NSInteger i) {
+            T1TabBarViewController *t = weakTB;
+            NSArray<UIView *> *views = [t tabViews];
+            if (i >= (NSInteger)views.count) return;
+            // As the tab bar does on a tap, so reselecting still scrolls to the top.
+            id target = [t delegate];
+            if (![target respondsToSelector:@selector(tabBarViewController:selectTabAtIndex:withView:)]) target = weakNav;
+            [target tabBarViewController:t selectTabAtIndex:i withView:views[i]];
+            [weakNav.viewIfLoaded setNeedsLayout];
+        });
     }
-    bar.nav = nav;
-    bar.tabBar = tb;
-    bar.topInset = LBSidebarTop(root);
-    if (bar.superview != root) [root addSubview:bar];
-    [root bringSubviewToFront:bar];
-    bar.frame = CGRectMake(root.bounds.size.width - sidebarWidth, 0, sidebarWidth, root.bounds.size.height);
-    [bar reloadTabs];
 
-    root.backgroundColor = LBBackdrop();
+    // The current tab as a column card, where the space left of the strip holds two columns.
     UIView *container = card.superview;
     if (!container) return;
+    CGFloat strip = LBStripWidth(w.rootViewController.viewIfLoaded ?: root);
+    CGRect area = [container convertRect:CGRectMake(0, 0, root.bounds.size.width - strip, root.bounds.size.height) fromView:root];
+    if (area.size.width < 2 * LBMinimumColumnWidth) { LBUncard(card); return; }
+    root.backgroundColor = LBBackdrop();
     if (container != root) container.backgroundColor = LBBackdrop();
-    CGRect area = [container convertRect:CGRectMake(0, 0, root.bounds.size.width - sidebarWidth, root.bounds.size.height)
-                                fromView:root];
     // In from the top as far as the bottom keeps clear (gi-os/twitter's card margins).
     CGFloat m = MAX(root.safeAreaInsets.bottom, 12);
-    CGFloat w = MIN(LBColumnWidth, area.size.width - 2 * m);
-    CGRect f = CGRectMake(round(CGRectGetMidX(area) - w / 2), CGRectGetMinY(area) + m, w, area.size.height - 2 * m);
+    CGFloat width = MIN(LBColumnWidth, area.size.width - 2 * m);
+    CGRect f = CGRectMake(round(CGRectGetMidX(area) - width / 2), CGRectGetMinY(area) + m, width, area.size.height - 2 * m);
     if (!CGRectEqualToRect(card.frame, f)) card.frame = f;
     card.layer.cornerRadius = LBCardRadius;
     card.layer.cornerCurve = kCACornerCurveContinuous;
@@ -297,28 +390,16 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 %end
 
 %hook T1TabBarViewController
-// The tab bar stays hidden while the sidebar stands in for it (scrolling would otherwise bring it back).
+// The older tab bar stays hidden while the rail stands in for it (scrolling would otherwise bring it back).
 - (void)setTabBarHidden:(BOOL)hidden withDuration:(double)duration completion:(id)completion {
-    %orig(hidden || LBWide(self.viewIfLoaded), duration, completion);
-}
-%end
-%end
-
-%group FAB
-%hook TFNFloatingActionButton
-// Compose lives in the sidebar on a wide window; remember what the app wants for when it narrows.
-- (void)setHidden:(BOOL)hidden {
-    objc_setAssociatedObject(self, kLBFABWantsHidden, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    %orig(hidden || LBWide(self));
-}
-- (void)didMoveToWindow {
-    %orig;
-    [self setHidden:[objc_getAssociatedObject(self, kLBFABWantsHidden) boolValue]];
+    UIWindow *w = self.viewIfLoaded.window;
+    BOOL glass = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue] != nil;
+    %orig(hidden || (!glass && LBSidebarWanted(w)), duration, completion);
 }
 %end
 %end
 
 %ctor {
+    if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill")) %init(GlassTabBar);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
-    if (objc_getClass("TFNFloatingActionButton")) %init(FAB);
 }

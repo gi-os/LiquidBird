@@ -6,8 +6,8 @@
 // Placeholder classes (unverified, see CLAUDE.md). Declared so the hooks compile; each one is
 // hooked from its own Logos group, set up only if the class exists, so a wrong name is a no-op
 // instead of a launch crash.
-@interface T1TabBarView : UIView @end
 @interface TFNSpacesBarView : UIView @end
+@interface _TtC7XSports22SportsGameCarouselView : UIView @end
 @interface T1LiveBroadcastCell : UIView @end
 
 // ---------- helpers ----------
@@ -27,35 +27,6 @@ static void LBKill(UIView *v) {
 static BOOL LBIsGrokString(NSString *s) {
     return s && [s rangeOfString:@"grok" options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
-
-// ---------- Liquid Glass tab bar / rail ----------
-
-%group TabBar
-%hook T1TabBarView  // placeholder: confirm in FLEX
-- (void)layoutSubviews {
-    %orig;
-    if (@available(iOS 26, *)) {
-        UIVisualEffectView *g = (UIVisualEffectView *)[self viewWithTag:LB_GLASS_TAG];
-        if (!g) {
-            UIGlassEffect *e = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-            e.interactive = YES;
-            g = [[UIVisualEffectView alloc] initWithEffect:e];
-            g.tag = LB_GLASS_TAG;
-            g.userInteractionEnabled = NO;
-            [self insertSubview:g atIndex:0];
-        }
-        self.backgroundColor = UIColor.clearColor;
-        for (UIView *v in self.subviews)
-            if (v != g && [v isKindOfClass:UIVisualEffectView.class]) v.hidden = YES;
-        g.frame = CGRectInset(self.bounds, 16, 6);
-        CGFloat r = MIN(g.bounds.size.width, g.bounds.size.height) / 2;
-        g.layer.cornerRadius = r;
-        g.layer.cornerCurve = kCACornerCurveContinuous;
-        g.layer.masksToBounds = YES;
-    }
-}
-%end
-%end
 
 // ---------- Grok removal ----------
 
@@ -104,16 +75,35 @@ static BOOL LBIsGrokString(NSString *s) {
 %end
 %end
 
+%group Sports
+// The live games carousel at the top of the home timeline: collapsed rather than just hidden, so it
+// leaves no gap.
+%hook _TtC7XSports22SportsGameCarouselView
+- (void)didMoveToWindow { %orig; self.hidden = YES; }
+- (CGSize)intrinsicContentSize { return CGSizeZero; }
+%end
+%end
+
 %ctor {
-    // X ships its own Liquid Glass redesign (TabBarPill, glass nav bar and buttons) behind the
-    // ios_liquid_glass_* feature switches; NeoFreeBird forces those on when its Labs toggle
-    // "Enable Liquid Glass" (NSUserDefaults key liquid_glass) is set. Default it on, once, so a
-    // later "off" in Labs sticks.
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    if (![d objectForKey:@"liquid_glass"]) [d setBool:YES forKey:@"liquid_glass"];
+    // NeoFreeBird's own toggles (NSUserDefaults, read by its BHTSettings) cover most of the brief, so
+    // LiquidBird only changes their defaults; anything Giovanni switches in its settings still wins.
+    // liquid_glass: X's own Liquid Glass redesign (TabBarPill, glass bars and buttons), shipped behind
+    //   the ios_liquid_glass_* feature switches, which NeoFreeBird forces on with this.
+    // hide_quick_compose: the "What's happening?" bar the redesign floats over the tab bar.
+    // hide_spaces: the Spaces/live line under the home tabs (T1FleetLineHeaderController).
+    [NSUserDefaults.standardUserDefaults registerDefaults:@{
+        @"liquid_glass": @YES,
+        @"hide_quick_compose": @YES,
+        @"hide_spaces": @YES,
+        @"hide_grok_analyze": @YES,
+        @"hide_grok_sidebar": @YES,
+        @"hide_grok_create": @YES,
+        @"hide_promoted": @YES,
+        @"hide_premium_offer": @YES,
+    }];
+    if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
 
     %init;  // UIKit hooks, always present
-    if (objc_getClass("T1TabBarView")) %init(TabBar);
     if (objc_getClass("TFNSpacesBarView")) %init(Spaces);
     if (objc_getClass("T1LiveBroadcastCell")) %init(Live);
 }
