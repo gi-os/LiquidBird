@@ -1,10 +1,12 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // Twitter for iPad's layout on the iPhone Duo's wide poses, after gi-os/twitter's TabStackView and
-// ClassicSidebar, in Liquid Glass. A glass rail of the tabs runs down the strip the status bar sits
-// in on the trailing edge, between the status bar and X's own compose button, in place of the tab
-// bar; where there's room for two columns, the current tab is a column card centred on a backdrop.
+// ClassicSidebar, in Liquid Glass. Down the strip the status bar sits in on the trailing edge: a glass
+// rail of the tabs (Grok left out), compose under it, and a gear for NeoFreeBird's settings, in place
+// of the tab bar and X's own compose button; where there's room for two columns, the current tab is a
+// column card centred on a backdrop.
 // Narrow windows (folded) stay stock. Step 1 of 2; step 2 opens tweets, profiles and links as
 // further columns.
 //
@@ -28,6 +30,10 @@
 @end
 @interface _TtC11XNavigation10TabBarPill : UIView
 @end
+@interface _TtC11XNavigation25TabBarAccessoryButtonView : UIView
+@end
+@interface TFNFloatingActionButton : UIView
+@end
 
 static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
 static const CGFloat LBMinimumColumnWidth = 400;
@@ -40,7 +46,6 @@ static const CGFloat LBStripDefault = 100;
 
 static const void *kLBSidebar = &kLBSidebar;
 static const void *kLBGlassTabBar = &kLBGlassTabBar;
-static const void *kLBCompose = &kLBCompose;
 static const void *kLBWantedAlpha = &kLBWantedAlpha;
 static const void *kLBTiled = &kLBTiled;
 
@@ -90,16 +95,29 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
     return [UIImage systemImageNamed:name withConfiguration:c] ?: [UIImage systemImageNamed:@"circle" withConfiguration:c];
 }
 
-// MARK: - The rail
+// MARK: - The sidebar
+
+static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightSemibold];
+    [b setImage:[UIImage systemImageNamed:symbol withConfiguration:c] forState:UIControlStateNormal];
+    b.tintColor = UIColor.whiteColor;
+    b.accessibilityLabel = label;
+    [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+    [((UIVisualEffectView *)glass).contentView addSubview:b];
+    return b;
+}
 
 @interface LBSidebar : UIView
 @property (nonatomic) CGFloat top;       // under the status bar
-@property (nonatomic) CGFloat bottom;    // above the compose button
+@property (nonatomic, copy) void (^composeAction)(void);
+@property (nonatomic, copy) void (^settingsAction)(void);
 - (void)setTabs:(NSArray<UIView *> *)tabs selected:(NSInteger)selected activate:(void (^)(NSInteger))activate;
 @end
 
 @implementation LBSidebar {
-    UIVisualEffectView *_rail;
+    UIVisualEffectView *_rail, *_composeGlass, *_settingsGlass;
+    UIButton *_compose, *_settings;
     NSMutableArray<UIButton *> *_buttons;
     void (^_activate)(NSInteger);
 }
@@ -109,6 +127,13 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
         self.backgroundColor = UIColor.clearColor;
         _rail = LBGlassView(nil);
         [self addSubview:_rail];
+        _composeGlass = LBGlassView([UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1]);
+        [self addSubview:_composeGlass];
+        _compose = LBGlassButton(_composeGlass, @"plus", 22, self, @selector(composeTapped), @"New Tweet");
+        _settingsGlass = LBGlassView(nil);
+        [self addSubview:_settingsGlass];
+        _settings = LBGlassButton(_settingsGlass, @"gearshape", 15, self, @selector(settingsTapped), @"NeoFreeBird settings");
+        _settings.tintColor = [UIColor colorWithWhite:0.75 alpha:1];
         _buttons = [NSMutableArray array];
     }
     return self;
@@ -116,12 +141,14 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 
 // Only the glass takes touches; the strip around it stays the app's.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return !_rail.hidden && CGRectContainsPoint(_rail.frame, point);
+    for (UIView *g in @[_rail, _composeGlass, _settingsGlass])
+        if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
+    return NO;
 }
 
-- (void)tapped:(UIButton *)b {
-    if (_activate) _activate(b.tag);
-}
+- (void)tapped:(UIButton *)b { if (_activate) _activate(b.tag); }
+- (void)composeTapped { if (self.composeAction) self.composeAction(); }
+- (void)settingsTapped { if (self.settingsAction) self.settingsAction(); }
 
 - (void)setTabs:(NSArray<UIView *> *)tabs selected:(NSInteger)selected activate:(void (^)(NSInteger))activate {
     _activate = [activate copy];
@@ -149,35 +176,86 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
     [self setNeedsLayout];
 }
 
+// One column, centred between the status bar and the bottom: the rail, compose, then the gear.
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat pad = 4;
-    CGFloat height = _buttons.count * LBRow + 2 * pad;
-    CGFloat room = self.bottom - self.top;
-    // Centred between the status bar and compose, or from the top when that's all the room there is.
-    CGFloat y = room > height ? self.top + round((room - height) / 2) : self.top;
+    CGFloat pad = 4, gap = 14, settings = 40;
+    CGFloat rail = _buttons.count * LBRow + 2 * pad;
+    CGFloat total = rail + gap + LBGlassWidth + gap + settings;
+    CGFloat bottom = self.bounds.size.height - MAX(self.safeAreaInsets.bottom, 16);
+    CGFloat room = bottom - self.top;
+    CGFloat y = room > total ? self.top + round((room - total) / 2) : self.top;
+    CGFloat mid = self.bounds.size.width / 2;
+
     _rail.hidden = _buttons.count == 0;
-    _rail.frame = CGRectMake(round((self.bounds.size.width - LBGlassWidth) / 2), y, LBGlassWidth, height);
+    _rail.frame = CGRectMake(round(mid - LBGlassWidth / 2), y, LBGlassWidth, rail);
     _rail.layer.cornerRadius = LBGlassWidth / 2;
     for (NSUInteger i = 0; i < _buttons.count; i++) {
         UIButton *b = _buttons[i];
         b.frame = CGRectMake(pad, pad + i * LBRow, LBGlassWidth - 2 * pad, LBRow);
         b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
     }
+    y += rail + gap;
+    _composeGlass.frame = CGRectMake(round(mid - LBGlassWidth / 2), y, LBGlassWidth, LBGlassWidth);
+    _composeGlass.layer.cornerRadius = LBGlassWidth / 2;
+    _compose.frame = _composeGlass.contentView.bounds;
+    y += LBGlassWidth + gap;
+    _settingsGlass.frame = CGRectMake(round(mid - settings / 2), y, settings, settings);
+    _settingsGlass.layer.cornerRadius = settings / 2;
+    _settings.frame = _settingsGlass.contentView.bounds;
 }
 @end
 
 // MARK: - Placing it
 
-static UIView *LBFind(UIView *v, Class cls, NSInteger depth) {
-    if (!cls || depth > 30) return nil;
-    if ([v isKindOfClass:cls]) return v;
-    if ([v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class]) return nil;
-    for (UIView *s in v.subviews) {
-        UIView *r = LBFind(s, cls, depth + 1);
+static UIViewController *LBFindVC(UIViewController *vc, Class cls, NSInteger depth) {
+    if (!vc || !cls || depth > 8) return nil;
+    if ([vc isKindOfClass:cls]) return vc;
+    for (UIViewController *c in vc.childViewControllers) {
+        UIViewController *r = LBFindVC(c, cls, depth + 1);
         if (r) return r;
     }
     return nil;
+}
+
+static id LBMsg(id target, NSString *selector) {
+    SEL sel = NSSelectorFromString(selector);
+    return [target respondsToSelector:sel] ? ((id (*)(id, SEL))objc_msgSend)(target, sel) : nil;
+}
+
+// X's own compose: the Liquid Glass navigation's key command, or the older tab's compose.
+static void LBCompose(UIWindow *w) {
+    UIViewController *root = w.rootViewController;
+    UIViewController *x = LBFindVC(root, objc_getClass("_TtC14T1TwitterSwift34XTabbedAppNavigationViewController"), 0);
+    SEL key = NSSelectorFromString(@"handleComposeTweetKeyCommand");
+    if ([x respondsToSelector:key]) { ((void (*)(id, SEL))objc_msgSend)(x, key); return; }
+    UIViewController *t1 = LBFindVC(root, objc_getClass("T1TabbedAppNavigationViewController"), 0);
+    id tabNav = LBMsg(t1, @"currentTabNavigationController");
+    SEL show = NSSelectorFromString(@"showComposeFromBarButtonItem:");
+    if ([tabNav respondsToSelector:show]) {
+        UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose target:nil action:nil];
+        ((void (*)(id, SEL, id))objc_msgSend)(tabNav, show, item);
+    }
+}
+
+// NeoFreeBird's settings (BHTManager, in BHTwitter.dylib), as a sheet: its own entry in Settings
+// doesn't show on these layouts.
+static void LBOpenNeoFreeBirdSettings(UIWindow *w) {
+    Class manager = objc_getClass("BHTManager");
+    SEL make = NSSelectorFromString(@"BHTSettingsWithAccount:");
+    if (![manager respondsToSelector:make]) return;
+    id account = LBMsg(LBMsg(objc_getClass("T1HostViewController"), @"sharedHostViewController"), @"currentAccount");
+    UIViewController *settings = ((id (*)(id, SEL, id))objc_msgSend)(manager, make, account);
+    if (!settings) return;
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settings];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    UIViewController *top = w.rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    [top presentViewController:nav animated:YES completion:nil];
+}
+
+static BOOL LBIsGrokTab(UIView *tab) {
+    return [tab.accessibilityLabel rangeOfString:@"grok" options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
 // The strip down the trailing edge: the safe area there, which the status bar's strip is, or a default.
@@ -194,40 +272,35 @@ static CGFloat LBStatusBottom(UIView *host) {
     return host.safeAreaInsets.top + 16;
 }
 
-// X's compose button where it sits in the strip, looked up again only when the one found has gone.
-static CGFloat LBComposeTop(UIWindow *w, UIView *host, CGFloat strip) {
-    CGFloat fallback = host.bounds.size.height - MAX(host.safeAreaInsets.bottom, 12) - 96;
-    UIView *compose = [objc_getAssociatedObject(w, kLBCompose) nonretainedObjectValue];
-    if (!compose || compose.window != w) {
-        compose = nil;
-        for (NSString *name in @[@"TFNFloatingActionButton", @"_TtC11XNavigation25TabBarAccessoryButtonView"]) {
-            compose = LBFind(host, objc_getClass(name.UTF8String), 0);
-            if (compose) break;
-        }
-        objc_setAssociatedObject(w, kLBCompose, compose ? [NSValue valueWithNonretainedObject:compose] : nil,
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (!compose || compose.hidden || compose.alpha < 0.01) return fallback;
-    CGRect f = [host convertRect:compose.bounds fromView:compose];
-    if (CGRectGetMidX(f) < host.bounds.size.width - strip) return fallback;
-    return CGRectGetMinY(f) - 16;
-}
-
 static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger selected, void (^activate)(NSInteger)) {
     LBSidebar *bar = objc_getAssociatedObject(w, kLBSidebar);
     UIView *host = w.rootViewController.viewIfLoaded;
     if (!host || !LBSidebarWanted(w) || tabs.count == 0) { [bar removeFromSuperview]; return; }
     if (!bar) {
         bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
+        __weak UIWindow *weakWindow = w;
+        bar.composeAction = ^{ LBCompose(weakWindow); };
+        bar.settingsAction = ^{ LBOpenNeoFreeBirdSettings(weakWindow); };
         objc_setAssociatedObject(w, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    // Grok stays out of the rail; the rest keep their places in the app's own list.
+    NSMutableArray<UIView *> *shown = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *index = [NSMutableArray array];
+    NSInteger shownSelected = -1;
+    for (NSUInteger i = 0; i < tabs.count; i++) {
+        if (LBIsGrokTab(tabs[i])) continue;
+        if ((NSInteger)i == selected) shownSelected = (NSInteger)shown.count;
+        [shown addObject:tabs[i]];
+        [index addObject:@(i)];
     }
     CGFloat strip = LBStripWidth(host);
     if (bar.superview != host) [host addSubview:bar];
     [host bringSubviewToFront:bar];
     bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
     bar.top = LBStatusBottom(host);
-    bar.bottom = LBComposeTop(w, host, strip);
-    [bar setTabs:tabs selected:selected activate:activate];
+    [bar setTabs:shown selected:shownSelected activate:^(NSInteger i) {
+        if (i < (NSInteger)index.count) activate(index[i].integerValue);
+    }];
 }
 
 // MARK: - X's Liquid Glass tab bar
@@ -292,6 +365,30 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 %end
 
 %hook _TtC11XNavigation10TabBarPill
+- (void)layoutSubviews {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(LBBarAlpha(self, alpha));
+}
+%end
+
+// X's own compose buttons (the floating one, and the glass tab bar's accessory) give way to the
+// sidebar's.
+%hook TFNFloatingActionButton
+- (void)layoutSubviews {
+    %orig;
+    [self setAlpha:LBWantedAlpha(self)];
+}
+- (void)setAlpha:(CGFloat)alpha {
+    %orig(LBBarAlpha(self, alpha));
+}
+%end
+%end
+
+%group GlassAccessory
+%hook _TtC11XNavigation25TabBarAccessoryButtonView
 - (void)layoutSubviews {
     %orig;
     [self setAlpha:LBWantedAlpha(self)];
@@ -400,6 +497,9 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 %end
 
 %ctor {
-    if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill")) %init(GlassTabBar);
+    // TFNFloatingActionButton rides in the GlassTabBar group: it's there either way.
+    if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
+        objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
+    if (objc_getClass("_TtC11XNavigation25TabBarAccessoryButtonView")) %init(GlassAccessory);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
 }

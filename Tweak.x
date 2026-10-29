@@ -9,6 +9,8 @@
 @interface TFNSpacesBarView : UIView @end
 @interface _TtC7XSports22SportsGameCarouselView : UIView @end
 @interface T1LiveBroadcastCell : UIView @end
+@interface TFSFeatureSwitches : NSObject @end
+@interface TFSInstrumentedFeatureSwitches : NSObject @end
 
 // ---------- helpers ----------
 
@@ -75,6 +77,28 @@ static BOOL LBIsGrokString(NSString *s) {
 %end
 %end
 
+// ---------- Feature switches ----------
+
+// X's own switches LiquidBird turns off. These hooks load after NeoFreeBird's, so they're asked first.
+// ios_tab_bar_default_show_grok: the Grok tab in the tab bar.
+static BOOL LBSwitchOff(NSString *key) {
+    return [key isKindOfClass:NSString.class] && [key isEqualToString:@"ios_tab_bar_default_show_grok"];
+}
+
+%group Switches
+%hook TFSFeatureSwitches
+- (BOOL)boolForKey:(NSString *)key { return LBSwitchOff(key) ? NO : %orig; }
+- (BOOL)unsafePeekBoolForKey:(NSString *)key { return LBSwitchOff(key) ? NO : %orig; }
+%end
+%end
+
+%group InstrumentedSwitches
+%hook TFSInstrumentedFeatureSwitches
+- (BOOL)boolForKey:(NSString *)key { return LBSwitchOff(key) ? NO : %orig; }
+- (BOOL)unsafePeekBoolForKey:(NSString *)key { return LBSwitchOff(key) ? NO : %orig; }
+%end
+%end
+
 %group Sports
 // The live games carousel at the top of the home timeline: collapsed rather than just hidden, so it
 // leaves no gap.
@@ -102,6 +126,8 @@ static BOOL LBIsGrokString(NSString *s) {
         @"hide_premium_offer": @YES,
     }];
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
+    if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
+    if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);
 
     %init;  // UIKit hooks, always present
     if (objc_getClass("TFNSpacesBarView")) %init(Spaces);
