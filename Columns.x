@@ -34,6 +34,7 @@ static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns 
 
 // The sidebar's strip down the trailing edge (Tiling.x): the safe area there, or its default.
 CGFloat LBSideStrip(UIWindow *w);   // Tiling.x: the status bar's strip, remembered while it's hidden
+void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
 static CGFloat LBCSidebarWidth(UIWindow *w) {
     CGFloat r = LBSideStrip(w);
@@ -544,6 +545,8 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         CGFloat left = !wide || (centre && !isPanel) ? 0 : isPanel ? (right ? 0 : feed) : (right ? panelWidth : 0);
         CGFloat rightInset = !wide || (centre && !isPanel) ? 0 : isPanel ? (right ? feed : 0) : (right ? 0 : panelWidth);
         if (fabs(extra.left - left) >= 0.5 || fabs(extra.right - rightInset) >= 0.5) {
+            LBLog(@"%@ sides %.0f,%.0f -> %.0f,%.0f", NSStringFromClass([(UINavigationController *)c viewControllers].firstObject.class),
+                  extra.left, extra.right, left, rightInset);
             extra.left = left;
             extra.right = rightInset;
             c.additionalSafeAreaInsets = extra;
@@ -605,6 +608,7 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
         if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
         strip.rootNavigation = self;
         // After the column last touched, or from the root (the sliver), replacing every column.
+        LBLog(@"column for %@", NSStringFromClass(vc.class));
         [strip open:vc after:strip.touchedColumn animated:animated];
     } @catch (NSException *e) {
         NSLog(@"LiquidBird: couldn't open a column (%@), pushing instead", e);
@@ -620,7 +624,11 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
     UIView *screen = self.topViewController.viewIfLoaded;
     if (!screen) return;
     CGRect frame = LBCFitScreen(self.topViewController, screen.frame);
-    if (!CGRectEqualToRect(screen.frame, frame)) screen.frame = frame;
+    if (!CGRectEqualToRect(screen.frame, frame)) {
+        LBLog(@"%@ fitted %@ -> %@", NSStringFromClass(self.topViewController.class), NSStringFromCGRect(screen.frame),
+              NSStringFromCGRect(frame));
+        screen.frame = frame;
+    }
 }
 %end
 

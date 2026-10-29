@@ -8,6 +8,26 @@ extern NSString *LBCPanelStatus;   // Columns.x
 // to Claude. Class names, frames, hidden/alpha, accessibility identifiers and control labels only; cells
 // are listed by class without their contents, so no tweet text is copied.
 
+// The layout changes LiquidBird made lately (Tiling.x, Columns.x), newest last, with how long before the
+// copy: what it did when something jumped.
+static NSMutableArray<NSArray *> *LBLogLines(void) {
+    static NSMutableArray *lines;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lines = [NSMutableArray array]; });
+    return lines;
+}
+
+void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+void LBLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSMutableArray *lines = LBLogLines();
+    [lines addObject:@[@(CFAbsoluteTimeGetCurrent()), line]];
+    if (lines.count > 120) [lines removeObjectAtIndex:0];
+}
+
 static NSString *LBPad(NSInteger depth) {
     return [@"" stringByPaddingToLength:(NSUInteger)depth * 2 withString:@" " startingAtIndex:0];
 }
@@ -81,7 +101,11 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
                           win.hidden ? @" hidden" : @"", win.isKeyWindow ? @" key" : @"", NSStringFromCGRect(win.frame),
                           NSStringFromClass(win.rootViewController.class), win.rootViewController.prefersStatusBarHidden];
     [out appendFormat:@"Explore panel: %@\n\n", LBCPanelStatus];
-    [out appendString:@"== view controllers\n"];
+    [out appendString:@"== LiquidBird's layout changes (seconds before this copy)\n"];
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    for (NSArray *entry in LBLogLines())
+        [out appendFormat:@"%7.2f  %@\n", now - [entry.firstObject doubleValue], entry.lastObject];
+    [out appendString:@"\n== view controllers\n"];
     if (w.rootViewController) LBDumpViewController(w.rootViewController, 0, out);
     [out appendString:@"\n== views\n"];
     NSInteger lines = 0;
@@ -113,3 +137,20 @@ static const void *kLBDumpGesture = &kLBDumpGesture;
     objc_setAssociatedObject(self, kLBDumpGesture, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 %end
+
+// Marks X's "Show more" on a long post in the log, so what moved after it shows.
+@interface T1StatusViewTruncationTokenAreaTapEventHandler : NSObject @end
+
+%group ShowMore
+%hook T1StatusViewTruncationTokenAreaTapEventHandler
+- (void)handleStatusViewEvent:(id)event controller:(id)controller scribeContext:(id)context {
+    LBLog(@"Show more tapped (in %@)", NSStringFromClass([controller class]));
+    %orig;
+}
+%end
+%end
+
+%ctor {
+    %init;
+    if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler")) %init(ShowMore);
+}

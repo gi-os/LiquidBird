@@ -96,6 +96,7 @@ static void LBKeepSideStrip(UIViewController *root) {
     CGFloat want = strip > 0 ? MAX(0, strip - w.safeAreaInsets.right) : 0;
     UIEdgeInsets extra = root.additionalSafeAreaInsets;
     if (fabs(extra.right - want) < 0.5) return;
+    LBLog(@"root right inset %.0f -> %.0f (strip %.0f, system %.0f)", extra.right, want, strip, w.safeAreaInsets.right);
     extra.right = want;
     root.additionalSafeAreaInsets = extra;
 }
@@ -147,6 +148,7 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 // MARK: - The sidebar
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
+void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
 NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 full width, 1 right
 void LBCSetFeedPosition(NSInteger side);
@@ -697,11 +699,13 @@ static void LBShiftHome(UIViewController *home) {
     if (barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
         CGFloat measured = round(CGRectGetMaxY(barFrame) - 6);
         if (fabs(measured - shift) >= 0.5) {
+            LBLog(@"Home shift %.0f -> %.0f (bar %@)", shift, measured, NSStringFromCGRect(barFrame));
             shift = measured;
             objc_setAssociatedObject(home, kLBHomeShift, @(shift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         CGFloat bottom = CGRectGetMaxY(barFrame) + rowHeight;
         if (fabs(bottom - rowBottom) >= 0.5) {
+            LBLog(@"Home row bottom %.0f -> %.0f", rowBottom, bottom);
             rowBottom = bottom;
             objc_setAssociatedObject(home, kLBHomeRowBottom, @(rowBottom), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
@@ -715,7 +719,10 @@ static void LBShiftHome(UIViewController *home) {
     CGRect frame = hide ? CGRectMake(view.frame.origin.x, -shift, bounds.size.width, bounds.size.height + shift)
                         : CGRectMake(view.frame.origin.x, 0, bounds.size.width, bounds.size.height);
     frame = LBCFitScreen(home, frame);   // unfolded, narrowed to the feed's side
-    if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
+    if (!CGRectEqualToRect(view.frame, frame)) {
+        LBLog(@"Home frame %@ -> %@", NSStringFromCGRect(view.frame), NSStringFromCGRect(frame));
+        view.frame = frame;
+    }
 
     // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
     // 68pt on the Duo), so the first tweet started under the row. The timelines' pager (Home's first
@@ -730,12 +737,16 @@ static void LBShiftHome(UIViewController *home) {
     CGFloat measured = [objc_getAssociatedObject(home, kLBHomeExtra) doubleValue];
     BOOL settled = nav.topViewController == home && !nav.transitionCoordinator && fabs(view.frame.origin.y + shift) < 0.5;
     if (hide && settled && rowBottom > 0) {
+        CGFloat was = measured;
         measured = MAX(0, round(rowBottom - view.safeAreaInsets.top));
+        if (fabs(was - measured) >= 0.5)
+            LBLog(@"Home timeline extra measured %.0f -> %.0f (safe top %.0f)", was, measured, view.safeAreaInsets.top);
         objc_setAssociatedObject(home, kLBHomeExtra, @(measured), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     CGFloat extra = hide ? measured : 0;
     UIEdgeInsets insets = pager.additionalSafeAreaInsets;
     if (fabs(insets.top - extra) < 0.5) return;
+    LBLog(@"Home timeline inset %.0f -> %.0f", insets.top, extra);
     insets.top = extra;
     pager.additionalSafeAreaInsets = insets;
 }
@@ -753,6 +764,7 @@ static void LBLiftTweet(UIViewController *tweet) {
     CGFloat want = lift ? round(8 - base) : 0;
     objc_setAssociatedObject(tweet, kLBTweetLifted, @(lift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (fabs(extra.top - want) < 0.5) return;
+    LBLog(@"tweet lift %.0f -> %.0f", extra.top, want);
     extra.top = want;
     tweet.additionalSafeAreaInsets = extra;
 }
