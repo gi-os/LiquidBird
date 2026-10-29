@@ -4,8 +4,8 @@
 
 // Twitter for iPad's layout on the iPhone Duo's wide poses, after gi-os/twitter's TabStackView and
 // ClassicSidebar, in Liquid Glass. Down the strip the status bar sits in on the trailing edge: a small
-// Twitter logo (tap: NeoFreeBird's settings; long-press: the slide-over menu, which the hidden Home top
-// bar's avatar opened), a glass rail of the tabs (Grok left out), and compose (unless NeoFreeBird's
+// Twitter logo (tap: NeoFreeBird's settings; long-press: a menu with the slide-over menu, which the
+// hidden Home top bar's avatar opened, and the unfolded layout's settings), a glass rail of the tabs (Grok left out), and compose (unless NeoFreeBird's
 // "hide tweet button" is on), in place of the tab bar and X's own compose button; where there's room
 // for two columns, the current tab is a column card centred on a backdrop.
 // Narrow windows (folded) stay stock. Step 1 of 2; step 2 opens tweets, profiles and links as
@@ -115,6 +115,8 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 
 // MARK: - The sidebar
 
+void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
+
 static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightSemibold];
@@ -155,8 +157,15 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
         _logo.accessibilityLabel = @"NeoFreeBird settings";
         _logo.imageView.contentMode = UIViewContentModeScaleAspectFit;
         [_logo addTarget:self action:@selector(logoTapped) forControlEvents:UIControlEventTouchUpInside];
-        // Long-press: the slide-over menu, which the hidden Home top bar's avatar opened.
-        [_logo addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(logoPressed:)]];
+        // Long-press: a menu with the slide-over menu (which the hidden Home top bar's avatar opened) and
+        // the unfolded layout's settings, built as it opens so it shows them as they are.
+        if (@available(iOS 15, *)) {
+            __weak LBSidebar *weakSelf = self;
+            _logo.menu = [UIMenu menuWithChildren:@[[UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *)) {
+                completion([weakSelf logoMenu]);
+            }]]];
+            _logo.showsMenuAsPrimaryAction = NO;
+        }
         [_logoGlass.contentView addSubview:_logo];
         _rail = LBGlassView(nil);
         [self addSubview:_rail];
@@ -178,8 +187,34 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 - (void)tapped:(UIButton *)b { if (_activate) _activate(b.tag); }
 - (void)logoTapped { if (self.settingsAction) self.settingsAction(); }
 - (void)composeTapped { if (self.composeAction) self.composeAction(); }
-- (void)logoPressed:(UILongPressGestureRecognizer *)g {
-    if (g.state == UIGestureRecognizerStateBegan && self.menuAction) self.menuAction();
+- (NSArray<UIMenuElement *> *)logoMenu {
+    __weak LBSidebar *weakSelf = self;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    UIAction *menu = [UIAction actionWithTitle:@"Slide-over menu" image:[UIImage systemImageNamed:@"sidebar.left"]
+                                    identifier:nil handler:^(UIAction *a) { if (weakSelf.menuAction) weakSelf.menuAction(); }];
+    id explore = [defaults objectForKey:@"liquidbird_explore_panel"];
+    BOOL exploreOn = explore ? [explore boolValue] : YES;
+    UIAction *panel = [UIAction actionWithTitle:@"Explore beside the feed" image:[UIImage systemImageNamed:@"sidebar.right"]
+                                     identifier:nil handler:^(UIAction *a) {
+        [defaults setBool:!exploreOn forKey:@"liquidbird_explore_panel"];
+        LBCRelayout(weakSelf.window);
+    }];
+    panel.state = exploreOn ? UIMenuElementStateOn : UIMenuElementStateOff;
+    BOOL right = [defaults boolForKey:@"liquidbird_feed_right"];
+    UIAction *onLeft = [UIAction actionWithTitle:@"Feed on the left" image:[UIImage systemImageNamed:@"rectangle.lefthalf.filled"]
+                                      identifier:nil handler:^(UIAction *a) {
+        [defaults setBool:NO forKey:@"liquidbird_feed_right"];
+        LBCRelayout(weakSelf.window);
+    }];
+    onLeft.state = right ? UIMenuElementStateOff : UIMenuElementStateOn;
+    UIAction *onRight = [UIAction actionWithTitle:@"Feed on the right" image:[UIImage systemImageNamed:@"rectangle.righthalf.filled"]
+                                       identifier:nil handler:^(UIAction *a) {
+        [defaults setBool:YES forKey:@"liquidbird_feed_right"];
+        LBCRelayout(weakSelf.window);
+    }];
+    onRight.state = right ? UIMenuElementStateOn : UIMenuElementStateOff;
+    UIMenu *side = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[onLeft, onRight]];
+    return @[menu, panel, side];
 }
 
 - (void)setComposeHidden:(BOOL)hidden {

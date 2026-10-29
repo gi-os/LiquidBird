@@ -353,11 +353,18 @@ static UINavigationController *LBCExploreTab(UIViewController *tabs) {
 }
 
 static BOOL LBCFeedOnRight(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_feed_right"]; }
+// Explore beside the feed can be turned off (the sidebar logo's menu): the feed stays narrow, on its
+// side, with black beside it.
+static BOOL LBCExploreEnabled(void) {
+    id on = [NSUserDefaults.standardUserDefaults objectForKey:@"liquidbird_explore_panel"];
+    return on ? [on boolValue] : YES;
+}
 
 // A two-finger swipe left or right moves the feed to that side, Explore to the other (one finger stays
 // the timelines' own swipe between For you and Following).
 @interface LBCSwipe : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UIViewController *tabs;
+- (void)relayout;
 @end
 
 @implementation LBCSwipe
@@ -368,6 +375,9 @@ static BOOL LBCFeedOnRight(void) { return [NSUserDefaults.standardUserDefaults b
     BOOL right = d.x > 0;
     if (right == LBCFeedOnRight()) return;
     [NSUserDefaults.standardUserDefaults setBool:right forKey:@"liquidbird_feed_right"];
+    [self relayout];
+}
+- (void)relayout {
     UIView *view = self.tabs.viewIfLoaded;
     [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:0 animations:^{
         [view setNeedsLayout];
@@ -380,6 +390,11 @@ static BOOL LBCFeedOnRight(void) { return [NSUserDefaults.standardUserDefaults b
 @end
 
 static const void *kLBCSwipe = &kLBCSwipe;
+
+// For the sidebar logo's menu (Tiling.x), after a setting changes.
+void LBCRelayout(UIWindow *w) {
+    [(LBCSwipe *)objc_getAssociatedObject(w, kLBCSwipe) relayout];
+}
 
 static void LBCInstallSwipe(UIWindow *w, UIViewController *tabs) {
     LBCSwipe *swipe = objc_getAssociatedObject(w, kLBCSwipe);
@@ -427,12 +442,13 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     UIView *exploreView = explore.viewIfLoaded;
     NSString *selected = LBSelectedTabLabel(w);
     BOOL exploreSelected = selected ? [selected isEqualToString:@"Explore"] : (exploreView && !LBCWantsHidden(exploreView));
-    BOOL panel = LBCPanelWanted(w) && exploreView && !exploreSelected;
-    LBCPanelStatus = !LBCPanelWanted(w) ? @"no room" : !explore ? @"no Explore tab" : !exploreView ? @"Explore not loaded"
-                   : exploreSelected ? @"Explore is the selected tab" : @"shown";
+    BOOL wide = LBCPanelWanted(w);
+    BOOL panel = wide && LBCExploreEnabled() && exploreView && !exploreSelected;
+    LBCPanelStatus = !wide ? @"no room" : !LBCExploreEnabled() ? @"turned off" : !explore ? @"no Explore tab"
+                   : !exploreView ? @"Explore not loaded" : exploreSelected ? @"Explore is the selected tab" : @"shown";
     // X makes a tab the first time it's shown: once a launch, Explore is shown for a moment so it exists,
     // then the tab that was selected comes back.
-    if (LBCPanelWanted(w) && !explore && !LBCExploreRequested && selected && !exploreSelected) {
+    if (wide && LBCExploreEnabled() && !explore && !LBCExploreRequested && selected && !exploreSelected) {
         LBCExploreRequested = YES;
         LBCPanelStatus = @"making Explore";
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -448,9 +464,10 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     }
     CGFloat width = view.bounds.size.width;
     CGFloat panelWidth = [view convertRect:CGRectMake(0, 0, LBCPanelWidth(w), 1) fromView:nil].size.width;
-    CGFloat feed = panel ? [view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCPanelWidth(w), 1) fromView:nil].size.width : width;
-    // A two-finger swipe puts the feed on either side (LBCSwiped).
-    BOOL right = panel && LBCFeedOnRight();
+    // Wherever there's room the feed is narrow, Explore or black beside it; a two-finger swipe (or the
+    // logo's menu) puts it on either side.
+    CGFloat feed = wide ? [view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCPanelWidth(w), 1) fromView:nil].size.width : width;
+    BOOL right = wide && LBCFeedOnRight();
     for (UIViewController *c in tabs.childViewControllers) {
         UIView *v = c.viewIfLoaded;
         if (!v || ![c isKindOfClass:UINavigationController.class]) continue;
