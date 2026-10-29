@@ -566,7 +566,9 @@ static const void *kLBHomeRowBottom = &kLBHomeRowBottom;
 
 static void LBShiftHome(UIViewController *home) {
     UIView *view = home.viewIfLoaded, *container = view.superview;
-    if (!view || !container) return;
+    // Off screen (a tweet open over it), Home's safe area reads zero; measuring then would change the
+    // timeline's inset and move its scroll position on the way back.
+    if (!view || !container || !view.window) return;
     CGFloat shift = [objc_getAssociatedObject(home, kLBHomeShift) doubleValue];
     // Where X puts the row of timelines with its bar shown; collapsed on scroll it's higher, so the
     // furthest down seen is the one to use.

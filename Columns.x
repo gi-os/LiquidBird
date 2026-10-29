@@ -348,5 +348,8 @@ static void LBCKeepBelowBar(UINavigationController *nav) {
 %end
 
 %ctor {
+    // Off until opening a column stops crashing (not an Objective-C exception, so the @try doesn't help):
+    // the defaults key liquidbird_columns turns them on for testing.
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_columns"]) return;
     if (objc_getClass("XNAVNavigationController") && objc_getClass("_TtC11XNavigation16TabBarController")) %init(Columns);
 }
