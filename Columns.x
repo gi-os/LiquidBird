@@ -328,6 +328,11 @@ static const CGFloat LBCWide = 600, LBCPanelMinimum = 240, LBCPanelMaximum = 380
 static const void *kLBCWantsHidden = &kLBCWantsHidden;
 static const void *kLBCPanel = &kLBCPanel;
 NSString *LBCPanelStatus = @"not laid out yet";   // for the layout copy (Debug.x)
+static BOOL LBCExploreRequested;
+
+// Tiling.x: the selected tab's name, and selecting a tab by name.
+NSString *LBSelectedTabLabel(UIWindow *w);
+BOOL LBActivateTab(UIWindow *w, NSString *label);
 
 static BOOL LBCPanelWanted(UIWindow *w) { return LBCAvailable(w) >= LBCWide; }
 static CGFloat LBCPanelWidth(UIWindow *w) {
@@ -354,10 +359,23 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     if (!w) return;
     UINavigationController *explore = LBCExploreTab(tabs);
     UIView *exploreView = explore.viewIfLoaded;
-    BOOL exploreSelected = exploreView && !LBCWantsHidden(exploreView);
+    NSString *selected = LBSelectedTabLabel(w);
+    BOOL exploreSelected = selected ? [selected isEqualToString:@"Explore"] : (exploreView && !LBCWantsHidden(exploreView));
     BOOL panel = LBCPanelWanted(w) && exploreView && !exploreSelected;
     LBCPanelStatus = !LBCPanelWanted(w) ? @"no room" : !explore ? @"no Explore tab" : !exploreView ? @"Explore not loaded"
                    : exploreSelected ? @"Explore is the selected tab" : @"shown";
+    // X makes a tab the first time it's shown: once a launch, Explore is shown for a moment so it exists,
+    // then the tab that was selected comes back.
+    if (LBCPanelWanted(w) && !explore && !LBCExploreRequested && selected && !exploreSelected) {
+        LBCExploreRequested = YES;
+        LBCPanelStatus = @"making Explore";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!LBActivateTab(w, @"Explore")) return;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                LBActivateTab(w, selected);
+            });
+        });
+    }
     if (exploreView) {
         objc_setAssociatedObject(exploreView, kLBCPanel, @(panel), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below

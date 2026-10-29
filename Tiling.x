@@ -469,6 +469,22 @@ static CGFloat LBBarAlpha(UIView *v, CGFloat wanted) {
     return LBSidebarWanted(v.window) ? 0 : wanted;
 }
 
+// For Columns.x: the selected tab's name, and selecting a tab by name, through X's glass tab bar.
+NSString *LBSelectedTabLabel(UIWindow *w) {
+    UIView *tabBar = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue];
+    if (!tabBar.window) return nil;
+    NSArray<UIView *> *tabs = LBGlassTabs(tabBar);
+    NSInteger i = LBGlassSelected(tabBar, tabs);
+    return i >= 0 && i < (NSInteger)tabs.count ? tabs[i].accessibilityLabel : nil;
+}
+
+BOOL LBActivateTab(UIWindow *w, NSString *label) {
+    UIView *tabBar = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue];
+    for (UIView *tab in LBGlassTabs(tabBar))
+        if ([tab.accessibilityLabel isEqualToString:label]) { [tab accessibilityActivate]; return YES; }
+    return NO;
+}
+
 static void LBSyncGlassTabBar(UIView *tabBar) {
     UIWindow *w = tabBar.window;
     if (!w) return;
@@ -570,16 +586,26 @@ static void LBShiftHome(UIViewController *home) {
     // Off screen (a tweet open over it), Home's safe area reads zero; measuring then would change the
     // timeline's inset and move its scroll position on the way back.
     if (!view || !container || !view.window) return;
+    // X puts the row of timelines at its bar's bottom edge. Measured from the bar whenever it's fully
+    // shown (not collapsed on scroll), as the latest value, not the largest ever seen: one odd layout
+    // (unfolding) once left Home shifted far enough to hide the row.
     CGFloat shift = [objc_getAssociatedObject(home, kLBHomeShift) doubleValue];
-    // Where X puts the row of timelines with its bar shown; collapsed on scroll it's higher, so the
-    // furthest down seen is the one to use.
+    CGFloat rowBottom = [objc_getAssociatedObject(home, kLBHomeRowBottom) doubleValue];
+    UINavigationBar *bar = home.navigationController.navigationBar;
     Class row = objc_getClass("_TtC11XNavigation18AccessoryStackView");
-    for (UIView *v in view.subviews) {
-        if (!row || ![v isKindOfClass:row]) continue;
-        CGFloat y = v.frame.origin.y - 6;
-        if (y > shift && y < 200) {
-            shift = y;
+    CGFloat rowHeight = 44;
+    for (UIView *v in view.subviews) if (row && [v isKindOfClass:row]) rowHeight = v.frame.size.height;
+    CGRect barFrame = bar.frame;
+    if (barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
+        CGFloat measured = round(CGRectGetMaxY(barFrame) - 6);
+        if (fabs(measured - shift) >= 0.5) {
+            shift = measured;
             objc_setAssociatedObject(home, kLBHomeShift, @(shift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        CGFloat bottom = CGRectGetMaxY(barFrame) + rowHeight;
+        if (fabs(bottom - rowBottom) >= 0.5) {
+            rowBottom = bottom;
+            objc_setAssociatedObject(home, kLBHomeRowBottom, @(rowBottom), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     }
     // Shifted whenever the sidebar shows, whether or not Home is on top: changing it while a tweet is
@@ -595,12 +621,6 @@ static void LBShiftHome(UIViewController *home) {
     // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
     // 68pt on the Duo), so the first tweet started under the row. The timelines' pager (Home's first
     // child) gets the difference, up to the row's bottom with the row shown.
-    CGFloat rowBottom = [objc_getAssociatedObject(home, kLBHomeRowBottom) doubleValue];
-    for (UIView *v in view.subviews)
-        if (row && [v isKindOfClass:row] && CGRectGetMaxY(v.frame) > rowBottom && CGRectGetMaxY(v.frame) < 260) {
-            rowBottom = CGRectGetMaxY(v.frame);
-            objc_setAssociatedObject(home, kLBHomeRowBottom, @(rowBottom), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
     UIViewController *pager = nil;
     for (UIViewController *c in home.childViewControllers)
         if ([NSStringFromClass(c.class) rangeOfString:@"SegmentedViewController"].location != NSNotFound) pager = c;
