@@ -41,15 +41,22 @@ static const CGFloat LBCardRadius = 26;
 static const CGFloat LBSidebarWindow = 600;        // wider than any iPhone held upright: the Duo's poses
 static const CGFloat LBGlassWidth = 52;
 static const CGFloat LBRow = 48;
-// Where the status bar runs down the side and the safe area doesn't say how wide its strip is.
-static const CGFloat LBStripDefault = 100;
+// Where the status bar runs down the side and the safe area doesn't say how wide its strip is: twice
+// the inset of its centre line on the Duo unfolded.
+static const CGFloat LBStripDefault = 66;
 
 static const void *kLBSidebar = &kLBSidebar;
 static const void *kLBGlassTabBar = &kLBGlassTabBar;
 static const void *kLBWantedAlpha = &kLBWantedAlpha;
 static const void *kLBTiled = &kLBTiled;
 
-static BOOL LBSidebarWanted(UIWindow *w) { return w && w.bounds.size.width >= LBSidebarWindow; }
+// The Duo's poses: a window wider than an iPhone held upright, or one whose status bar runs down the
+// trailing edge (a safe area on that side only).
+static BOOL LBSidebarWanted(UIWindow *w) {
+    if (!w) return NO;
+    UIEdgeInsets safe = w.safeAreaInsets;
+    return w.bounds.size.width >= LBSidebarWindow || (safe.right >= 40 && safe.left < 20);
+}
 
 static UIVisualEffectView *LBGlassView(UIColor *tint) {
     UIVisualEffect *effect;
@@ -180,10 +187,13 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat pad = 4, gap = 14, settings = 40;
-    CGFloat rail = _buttons.count * LBRow + 2 * pad;
-    CGFloat total = rail + gap + LBGlassWidth + gap + settings;
     CGFloat bottom = self.bounds.size.height - MAX(self.safeAreaInsets.bottom, 16);
     CGFloat room = bottom - self.top;
+    // Rows shrink (to 38) before the column runs past the bottom on a short pose.
+    CGFloat fixed = 2 * pad + gap + LBGlassWidth + gap + settings;
+    CGFloat row = _buttons.count ? MAX(38, MIN(LBRow, floor((room - fixed) / _buttons.count))) : LBRow;
+    CGFloat rail = _buttons.count * row + 2 * pad;
+    CGFloat total = rail + gap + LBGlassWidth + gap + settings;
     CGFloat y = room > total ? self.top + round((room - total) / 2) : self.top;
     CGFloat mid = self.bounds.size.width / 2;
 
@@ -192,7 +202,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     _rail.layer.cornerRadius = LBGlassWidth / 2;
     for (NSUInteger i = 0; i < _buttons.count; i++) {
         UIButton *b = _buttons[i];
-        b.frame = CGRectMake(pad, pad + i * LBRow, LBGlassWidth - 2 * pad, LBRow);
+        b.frame = CGRectMake(pad, pad + i * row, LBGlassWidth - 2 * pad, row);
         b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
     }
     y += rail + gap;
@@ -268,8 +278,7 @@ static CGFloat LBStripWidth(UIView *host) {
 static CGFloat LBStatusBottom(UIView *host) {
     CGRect sb = [host convertRect:host.window.windowScene.statusBarManager.statusBarFrame fromView:nil];
     if (!CGRectIsEmpty(sb) && CGRectGetMinX(sb) > host.bounds.size.width / 2) return CGRectGetMaxY(sb) + 16;
-    if (host.safeAreaInsets.right > 0 && host.safeAreaInsets.top < 1) return 232;
-    return host.safeAreaInsets.top + 16;
+    return MAX(host.safeAreaInsets.top, 64) + 12;
 }
 
 static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger selected, void (^activate)(NSInteger)) {
