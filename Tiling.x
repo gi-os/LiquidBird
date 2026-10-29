@@ -569,9 +569,14 @@ static void LBShiftHome(UIViewController *home) {
             objc_setAssociatedObject(home, kLBHomeShift, @(shift), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     }
-    BOOL hide = LBHidesBar(home.navigationController);
+    // Shifted whenever the sidebar shows, whether or not Home is on top: changing it while a tweet is
+    // open over Home moved the timeline's scroll position on the way back. Only the vertical is set, so
+    // the navigation's slide is left alone.
+    UINavigationController *nav = home.navigationController;
+    BOOL hide = LBSidebarWanted(nav.viewIfLoaded.window ?: view.window);
     CGRect bounds = container.bounds;
-    CGRect frame = hide ? CGRectMake(0, -shift, bounds.size.width, bounds.size.height + shift) : bounds;
+    CGRect frame = hide ? CGRectMake(view.frame.origin.x, -shift, bounds.size.width, bounds.size.height + shift)
+                        : CGRectMake(view.frame.origin.x, 0, bounds.size.width, bounds.size.height);
     if (!CGRectEqualToRect(view.frame, frame)) view.frame = frame;
 
     // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
