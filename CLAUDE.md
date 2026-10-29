@@ -3,7 +3,7 @@
 Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from the latest NeoFreeBird release: BHTwitter, branding already reverted; v7.3.0 = Twitter 12.38.1, built with the iOS 27.1 SDK). Personal sideload only.
 
 ## Goals
-1. Real iOS 26 Liquid Glass: floating glass pill/rail for the tab bar, glass on nav bars and post-detail buttons.
+1. Real iOS 26 Liquid Glass: floating glass pill/rail for the tab bar, glass on nav bars and post-detail buttons. X ships this itself (XNavigation.TabBarPill, XDesignSystem.Glass, TFNGlass*) behind the `ios_liquid_glass_*` feature switches; NeoFreeBird forces them with its Labs toggle (`liquid_glass` in NSUserDefaults), which LiquidBird defaults on. Hook glass in ourselves only where X's redesign leaves gaps.
 2. Remove Grok everywhere: tab, per-tweet button, post-detail floating button, "..." menu items.
 3. Remove Live / Spaces / broadcasts from timelines and the Spaces bar.
 4. Ads, premium upsells and banners: rely on NeoFreeBird's BHTwitter toggles first; hook only what survives.
