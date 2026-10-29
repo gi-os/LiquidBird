@@ -42,7 +42,8 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
     for (UIViewController *c in vc.childViewControllers) LBDumpViewController(c, depth + 1, out);
     UIViewController *p = vc.presentedViewController;
     if (p && p.presentingViewController == vc) {
-        [out appendFormat:@"%@presents:\n", LBPad(depth + 1)];
+        [out appendFormat:@"%@presents (style %ld, captures status bar %d, prefers it hidden %d):\n", LBPad(depth + 1),
+                          (long)p.modalPresentationStyle, p.modalPresentationCapturesStatusBarAppearance, p.prefersStatusBarHidden];
         LBDumpViewController(p, depth + 2, out);
     }
 }

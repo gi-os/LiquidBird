@@ -11,6 +11,7 @@
 @interface T1LiveBroadcastCell : UIView @end
 @interface TFSFeatureSwitches : NSObject @end
 @interface T1ImmersiveFullScreenViewController : UIViewController @end
+@interface TFNFullscreenMediaTransition : NSObject @end
 @interface TFSInstrumentedFeatureSwitches : NSObject @end
 
 // ---------- helpers ----------
@@ -111,6 +112,13 @@ static BOOL LBSwitchOff(NSString *key) {
 %end
 %end
 
+// The transition that presents it decides too, for whatever it presents.
+%group MediaTransition
+%hook TFNFullscreenMediaTransition
++ (BOOL)_prefersStatusBarHidden:(id)controller { return YES; }
+%end
+%end
+
 %group Sports
 // The live games carousel at the top of the home timeline: collapsed rather than just hidden, so it
 // leaves no gap.
@@ -140,6 +148,7 @@ static BOOL LBSwitchOff(NSString *key) {
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
     if (objc_getClass("T1ImmersiveFullScreenViewController")) %init(Photos);
+    if (objc_getClass("TFNFullscreenMediaTransition")) %init(MediaTransition);
     if (objc_getClass("TFSInstrumentedFeatureSwitches")) %init(InstrumentedSwitches);
 
     %init;  // UIKit hooks, always present
