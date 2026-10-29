@@ -17,7 +17,7 @@ static void LBDumpView(UIView *v, NSInteger depth, NSMutableString *out, NSInteg
     if (v.hidden) [out appendString:@" hidden"];
     if (v.alpha < 0.99) [out appendFormat:@" a=%.2f", v.alpha];
     if (v.accessibilityIdentifier.length) [out appendFormat:@" id=%@", v.accessibilityIdentifier];
-    if ([v isKindOfClass:UIControl.class] && v.accessibilityLabel.length)
+    if (([v isKindOfClass:UIControl.class] || v.isAccessibilityElement) && v.accessibilityLabel.length)
         [out appendFormat:@" label=%@", [v.accessibilityLabel substringToIndex:MIN(v.accessibilityLabel.length, (NSUInteger)40)]];
     [out appendString:@"\n"];
     if (depth >= 45 || [v isKindOfClass:UITableViewCell.class] || [v isKindOfClass:UICollectionViewCell.class]) return;
