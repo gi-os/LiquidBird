@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // Step 2 of the tiling: Twitter for iPad's columns where there's room beside the sidebar (the Duo
 // unfolded), after gi-os/twitter's TabStackView. Opening a tweet, profile or link from the current tab
@@ -14,6 +15,10 @@
 // XNAVNavigationController outside its tabs crashed), in a container under the app's root beside the
 // sidebar, not in X's tab bar controller, which expects only its own tabs. A push from inside a column
 // opens the next column. If opening a column throws, the push goes ahead as usual instead.
+//
+// With room for both (the Duo unfolded), the tab's feed narrows and X's own trends page stands beside it
+// as a column that stays, like X desktop's right sidebar; what opens from it opens as columns, which
+// slide over it.
 
 @interface XNAVNavigationController : UINavigationController
 @end
@@ -316,6 +321,91 @@ static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
     return strip;
 }
 
+// MARK: - Trends beside the feed
+
+static const CGFloat LBCWide = 600, LBCTrendsMinimum = 240, LBCTrendsMaximum = 380;
+static const void *kLBCTrends = &kLBCTrends;
+static BOOL LBCTrendsChecked, LBCTrendsFailed;   // this launch
+
+static BOOL LBCTrendsWanted(UIWindow *w) {
+    return LBCAvailable(w) >= LBCWide && ![NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_trends_crashed"];
+}
+static CGFloat LBCTrendsWidth(UIWindow *w) {
+    return round(MIN(LBCTrendsMaximum, MAX(LBCTrendsMinimum, LBCAvailable(w) * 0.4)));
+}
+
+static id LBCMsg(id target, NSString *selector) {
+    SEL sel = NSSelectorFromString(selector);
+    return [target respondsToSelector:sel] ? ((id (*)(id, SEL))objc_msgSend)(target, sel) : nil;
+}
+
+// X's trends page, as its Explore makes it: from the account and its feature switches.
+static UIViewController *LBCMakeTrends(void) {
+    Class trendsClass = objc_getClass("T1TrendsLandingViewController"), featuresClass = objc_getClass("T1ExploreFeatures");
+    id account = LBCMsg(LBCMsg(objc_getClass("T1HostViewController"), @"sharedHostViewController"), @"currentAccount");
+    id switches = LBCMsg(account, @"featureSwitches");
+    SEL initFeatures = NSSelectorFromString(@"initWithFeatureSwitches:");
+    SEL initTrends = NSSelectorFromString(@"initWithFeatures:account:scribeContext:");
+    if (!trendsClass || !featuresClass || !account || !switches ||
+        ![featuresClass instancesRespondToSelector:initFeatures] || ![trendsClass instancesRespondToSelector:initTrends]) return nil;
+    id features = ((id (*)(id, SEL, id))objc_msgSend)([featuresClass alloc], initFeatures, switches);
+    return ((id (*)(id, SEL, id, id, id))objc_msgSend)([trendsClass alloc], initTrends, features, account, nil);
+}
+
+// Puts the trends column beside the feed (or takes it away), under the strip. If making it ever
+// crashes the app (the flag set while it opens outlives the launch), it isn't tried again.
+static LBColumnNavigationController *LBCUpdateTrends(UIWindow *w) {
+    LBColumnNavigationController *trends = objc_getAssociatedObject(w, kLBCTrends);
+    UIView *host = w.rootViewController.viewIfLoaded;
+    if (!host || !LBCTrendsWanted(w)) {
+        if (trends) {
+            [trends willMoveToParentViewController:nil];
+            [trends.view removeFromSuperview];
+            [trends removeFromParentViewController];
+            objc_setAssociatedObject(w, kLBCTrends, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return nil;
+    }
+    LBCStrip *strip = LBCStripFor(w, YES);
+    UIViewController *container = objc_getAssociatedObject(w, kLBCContainer);
+    if (!strip || !container) return nil;
+    if (!trends) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        if (!LBCTrendsChecked) {
+            LBCTrendsChecked = YES;
+            if ([defaults boolForKey:@"liquidbird_trends_opening"]) {
+                [defaults setBool:YES forKey:@"liquidbird_trends_crashed"];
+                [defaults removeObjectForKey:@"liquidbird_trends_opening"];
+                return nil;
+            }
+        }
+        if (LBCTrendsFailed) return nil;
+        [defaults setBool:YES forKey:@"liquidbird_trends_opening"];
+        UIViewController *page = nil;
+        @try { page = LBCMakeTrends(); } @catch (NSException *e) { page = nil; }
+        if (!page) {
+            LBCTrendsFailed = YES;
+            [defaults removeObjectForKey:@"liquidbird_trends_opening"];
+            return nil;
+        }
+        trends = [[LBColumnNavigationController alloc] initWithRootViewController:page];
+        trends.strip = strip;
+        trends.view.accessibilityIdentifier = @"LBColumn";
+        [container addChildViewController:trends];
+        [host insertSubview:trends.view belowSubview:strip];
+        [trends didMoveToParentViewController:container];
+        objc_setAssociatedObject(w, kLBCTrends, trends, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [defaults removeObjectForKey:@"liquidbird_trends_opening"];
+        });
+    }
+    CGFloat width = LBCTrendsWidth(w);
+    CGRect frame = [host convertRect:CGRectMake(LBCAvailable(w) - width, 0, width, w.bounds.size.height) fromView:nil];
+    if (!CGRectEqualToRect(trends.view.frame, frame)) trends.view.frame = frame;
+    if (trends.view.superview != host) [host insertSubview:trends.view belowSubview:strip];
+    return trends;
+}
+
 %group Columns
 %hook XNAVNavigationController
 - (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
@@ -351,7 +441,21 @@ static LBCStrip *LBCStripFor(UIWindow *w, BOOL create) {
 // folding puts them back on its stack.
 - (void)viewDidLayoutSubviews {
     %orig;
-    LBCStrip *strip = LBCStripFor(self.viewIfLoaded.window, NO);
+    UIWindow *w = self.viewIfLoaded.window;
+    // With the trends column beside it, the tab's feed narrows to the rest of the room.
+    LBColumnNavigationController *trends = w ? LBCUpdateTrends(w) : nil;
+    CGFloat feed = trends ? [self.view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCTrendsWidth(w), 1) fromView:nil].size.width
+                          : self.view.bounds.size.width;
+    Class xnav = objc_getClass("XNAVNavigationController");
+    for (UIViewController *c in self.childViewControllers) {
+        UIView *v = c.viewIfLoaded;
+        if (!v.window || ![c isKindOfClass:xnav]) continue;
+        CGRect f = v.frame;
+        if (fabs(f.size.width - feed) < 0.5) continue;
+        f.size.width = feed;
+        v.frame = f;
+    }
+    LBCStrip *strip = LBCStripFor(w, NO);
     if (!strip.count) return;
     UINavigationController *root = strip.rootNavigation;
     if (!LBCColumnsWanted(self.viewIfLoaded.window)) [strip foldBackOntoStack];
