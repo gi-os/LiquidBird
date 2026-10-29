@@ -2,10 +2,11 @@
 #import <objc/runtime.h>
 
 // Twitter for iPad's layout on a wide window (the iPhone Duo unfolded), after gi-os/twitter's
-// TabStackView and ClassicSidebar: a charcoal sidebar down the trailing edge, under the status bar,
-// in place of the tab bar and the floating compose button (compose at the top, the tabs at the
-// bottom), and the current tab as a column card centred on a backdrop. Narrow windows stay stock.
-// Step 1 of 2; step 2 opens tweets, profiles and links as further columns.
+// TabStackView and ClassicSidebar, in Liquid Glass: down the strip the status bar runs in on the
+// trailing edge, a glass compose button under the status bar and a glass rail of the tabs at the
+// bottom, in place of the tab bar and the floating compose button; the current tab is a column card
+// centred on a backdrop. Narrow windows stay stock. Step 1 of 2; step 2 opens tweets, profiles and
+// links as further columns.
 
 @interface T1TabbedAppNavigationViewController : UIViewController
 - (UIViewController *)selectedViewController;
@@ -27,19 +28,35 @@
 @interface TFNFloatingActionButton : UIView
 @end
 
-// gi-os/twitter's ColumnLayout and ClassicSidebar.
+// gi-os/twitter's ColumnLayout width; corners and sizes in Liquid Glass proportions.
 static const CGFloat LBColumnWidth = 476;
-static const CGFloat LBCardRadius = 4;
-static const CGFloat LBSidebarMinWidth = 56;
+static const CGFloat LBCardRadius = 26;
 static const CGFloat LBWideWindow = 700;
+static const CGFloat LBGlassWidth = 52;
+// Where iPhone Duo's status bar runs down the side, its centre line sits this far in from the edge.
+static const CGFloat LBStatusCentreDefault = 50;
 
 static BOOL LBWide(UIView *v) {
     UIWindow *w = v.window;
     return w && w.bounds.size.width >= LBWideWindow;
 }
 
-static UIColor *LBBackdrop(void) { return [UIColor colorWithRed:0.09 green:0.10 blue:0.11 alpha:1]; }
-static UIColor *LBSidebarColor(void) { return [UIColor colorWithRed:0.14 green:0.15 blue:0.17 alpha:1]; }
+static UIColor *LBBackdrop(void) { return [UIColor colorWithRed:0.05 green:0.055 blue:0.065 alpha:1]; }
+
+static UIVisualEffectView *LBGlassView(UIColor *tint) {
+    UIVisualEffect *effect;
+    if (@available(iOS 26, *)) {
+        UIGlassEffect *g = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+        g.interactive = YES;
+        g.tintColor = tint;
+        effect = g;
+    } else {
+        effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark];
+    }
+    UIVisualEffectView *v = [[UIVisualEffectView alloc] initWithEffect:effect];
+    v.layer.cornerCurve = kCACornerCurveContinuous;
+    return v;
+}
 
 // The largest image a tab view shows, for the sidebar's copy of that tab.
 static UIImage *LBTabImage(UIView *tab) {
@@ -78,29 +95,34 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 @end
 
 @implementation LBSidebar {
-    UIView *_edge;
+    UIVisualEffectView *_composeGlass;
     UIButton *_compose;
+    UIVisualEffectView *_rail;
     NSMutableArray<UIButton *> *_tabs;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = LBSidebarColor();
-        _edge = [UIView new];
-        _edge.backgroundColor = UIColor.blackColor;
-        [self addSubview:_edge];
+        self.backgroundColor = UIColor.clearColor;
+        _composeGlass = LBGlassView([UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1]);
+        [self addSubview:_composeGlass];
         _compose = [UIButton buttonWithType:UIButtonTypeSystem];
         UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
         [_compose setImage:[UIImage systemImageNamed:@"square.and.pencil" withConfiguration:c] forState:UIControlStateNormal];
         _compose.tintColor = UIColor.whiteColor;
-        _compose.backgroundColor = [UIColor colorWithRed:0.11 green:0.61 blue:0.94 alpha:1];
-        _compose.layer.cornerRadius = 22;
         _compose.accessibilityLabel = @"New Tweet";
         [_compose addTarget:self action:@selector(composeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:_compose];
+        [_composeGlass.contentView addSubview:_compose];
+        _rail = LBGlassView(nil);
+        [self addSubview:_rail];
         _tabs = [NSMutableArray array];
     }
     return self;
+}
+
+// Only the glass takes touches; the strip around it is the content's.
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(_composeGlass.frame, point) || (!_rail.hidden && CGRectContainsPoint(_rail.frame, point));
 }
 
 - (void)composeTapped {
@@ -131,10 +153,9 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
     while (_tabs.count > views.count) { [_tabs.lastObject removeFromSuperview]; [_tabs removeLastObject]; }
     while (_tabs.count < views.count) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-        b.layer.cornerRadius = 8;
         b.layer.cornerCurve = kCACornerCurveContinuous;
         [b addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:b];
+        [_rail.contentView addSubview:b];
         [_tabs addObject:b];
     }
     for (NSUInteger i = 0; i < views.count; i++) {
@@ -144,9 +165,11 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
         b.tag = (NSInteger)i;
         [b setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
         b.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        b.tintColor = on ? UIColor.whiteColor : [UIColor colorWithWhite:0.6 alpha:1];
-        b.backgroundColor = on ? [UIColor colorWithWhite:0 alpha:0.5] : UIColor.clearColor;
+        b.tintColor = on ? UIColor.whiteColor : [UIColor colorWithWhite:0.62 alpha:1];
+        // The selected tab sits on a lighter lozenge inside the rail, as in the system's glass tab bar.
+        b.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.16] : UIColor.clearColor;
         b.accessibilityLabel = views[i].accessibilityLabel;
+        b.selected = on;
     }
     [self setNeedsLayout];
 }
@@ -154,13 +177,20 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize s = self.bounds.size;
-    _edge.frame = CGRectMake(0, 0, 1, s.height);
-    _compose.frame = CGRectMake(round((s.width - 44) / 2), self.topInset, 44, 44);
-    CGFloat y = s.height - MAX(self.safeAreaInsets.bottom, 12);
-    for (UIButton *b in _tabs.reverseObjectEnumerator) {
-        y -= 48;
-        b.frame = CGRectMake(round((s.width - 48) / 2), y, 48, 44);
-        y -= 6;
+    CGFloat x = round((s.width - LBGlassWidth) / 2);
+    _composeGlass.frame = CGRectMake(x, self.topInset, LBGlassWidth, LBGlassWidth);
+    _composeGlass.layer.cornerRadius = LBGlassWidth / 2;
+    _compose.frame = _composeGlass.contentView.bounds;
+    CGFloat row = 48, pad = 4;
+    CGFloat railHeight = _tabs.count * row + 2 * pad;
+    CGFloat bottom = s.height - MAX(self.safeAreaInsets.bottom, 12);
+    _rail.hidden = _tabs.count == 0;
+    _rail.frame = CGRectMake(x, bottom - railHeight, LBGlassWidth, railHeight);
+    _rail.layer.cornerRadius = LBGlassWidth / 2;
+    for (NSUInteger i = 0; i < _tabs.count; i++) {
+        UIButton *b = _tabs[i];
+        b.frame = CGRectMake(pad, pad + i * row, LBGlassWidth - 2 * pad, row);
+        b.layer.cornerRadius = (LBGlassWidth - 2 * pad) / 2;
     }
 }
 @end
@@ -192,6 +222,14 @@ static CGFloat LBSidebarTop(UIView *root) {
     return root.safeAreaInsets.top + 12;
 }
 
+// How far in from the trailing edge the status bar's centre line runs, where it runs down the side.
+static CGFloat LBStatusCentreInset(UIView *root) {
+    CGRect sb = [root convertRect:root.window.windowScene.statusBarManager.statusBarFrame fromView:nil];
+    if (!CGRectIsEmpty(sb) && CGRectGetMinX(sb) > root.bounds.size.width / 2 && sb.size.height > sb.size.width)
+        return root.bounds.size.width - CGRectGetMidX(sb);
+    return LBStatusCentreDefault;
+}
+
 static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     UIView *root = nav.viewIfLoaded;
     if (!root.window) return;
@@ -212,14 +250,14 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
             [bar removeFromSuperview];
             for (UIViewController *c in nav.childViewControllers) {
                 UIView *v = c.viewIfLoaded;
-                if (v.layer.cornerRadius == LBCardRadius) { v.layer.cornerRadius = 0; v.layer.masksToBounds = NO; }
+                if (v.layer.cornerRadius == LBCardRadius) { v.layer.cornerRadius = 0; v.layer.masksToBounds = NO; v.layer.borderWidth = 0; }
             }
             if (card.superview) card.frame = card.superview.bounds;
         }
     }
     if (!wide) return;
 
-    CGFloat sidebarWidth = MAX(LBSidebarMinWidth, root.safeAreaInsets.right);
+    CGFloat sidebarWidth = 2 * LBStatusCentreInset(root);
     if (!bar) {
         bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
         objc_setAssociatedObject(nav, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -246,6 +284,8 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     card.layer.cornerRadius = LBCardRadius;
     card.layer.cornerCurve = kCACornerCurveContinuous;
     card.layer.masksToBounds = YES;
+    card.layer.borderWidth = 1 / MAX(root.traitCollection.displayScale, 1);
+    card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
 }
 
 %group Tiling
