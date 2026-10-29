@@ -1,0 +1,42 @@
+# Ad-hoc signing for Giovanni's own devices: run by the workflow's sign job, which alone gets the
+# signing secrets (App Store Connect key, match password); no third-party code runs there.
+# Certificates come from gi-os/ios-certs (match), as for the kit's apps.
+default_platform(:ios)
+
+BUNDLE = "com.gios.liquidbird"   # its own ID, so it installs next to the App Store X app
+ROOT = File.expand_path("..", __dir__)
+
+platform :ios do
+  # Signs out/unsigned.ipa (app extensions already stripped) into out/LiquidBird.ipa.
+  lane :adhoc do
+    api_key = app_store_connect_api_key(key_id: ENV["ASC_KEY_ID"], issuer_id: ENV["ASC_ISSUER_ID"], key_content: ENV["ASC_KEY_P8"], in_house: false)
+
+    devices = Spaceship::ConnectAPI::Device.all.select { |d| d.platform == "IOS" && d.status == "ENABLED" }
+    UI.message("Registered devices: #{devices.empty? ? 'none' : devices.map { |d| "#{d.name} (#{d.device_class}, …#{d.udid.to_s[-4..]})" }.join(', ')}")
+    UI.user_error!("No iPhone or iPad is registered in the developer account, so an ad-hoc build can't install anywhere. Register the device's UDID, then re-run.") if devices.empty?
+
+    unless Spaceship::ConnectAPI::BundleId.find(BUNDLE)
+      Spaceship::ConnectAPI::BundleId.create(name: "LiquidBird", identifier: BUNDLE, platform: "IOS")
+      UI.success("Registered bundle ID #{BUNDLE}")
+    end
+
+    setup_ci
+    match(
+      type: "adhoc",
+      app_identifier: BUNDLE,
+      git_url: "https://github.com/gi-os/ios-certs.git",
+      storage_mode: "git",
+      api_key: api_key,
+      readonly: false,
+      force_for_new_devices: true
+    )
+
+    resign(
+      ipa: File.join(ROOT, "out/unsigned.ipa"),
+      signing_identity: ENV["sigh_#{BUNDLE}_adhoc_certificate-name"],
+      provisioning_profile: ENV["sigh_#{BUNDLE}_adhoc_profile-path"],
+      bundle_id: BUNDLE
+    )
+    FileUtils.mv(File.join(ROOT, "out/unsigned.ipa"), File.join(ROOT, "out/LiquidBird.ipa"))
+  end
+end

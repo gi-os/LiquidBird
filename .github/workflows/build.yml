@@ -10,8 +10,12 @@ on:
     branches: [main]
 
 jobs:
+  # Builds the unsigned IPA. Runs third-party code (Theos, cyan, the NeoFreeBird IPA), so it gets
+  # no secrets.
   ipa:
     runs-on: macos-26
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -43,9 +47,57 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v4
+        id: upload
         with:
           name: LiquidBird-ipa
           path: out/LiquidBird.ipa
           if-no-files-found: error
           compression-level: 0  # an IPA is already a zip
           retention-days: 7
+
+  # Ad-hoc signs it for the devices registered in the developer account (fastlane/Fastfile), as its
+  # own bundle ID. App extensions go: each would need its own ID and profile. On success the unsigned
+  # artifact is deleted, so one IPA per run counts against artifact storage.
+  sign:
+    needs: ipa
+    runs-on: macos-26
+    permissions:
+      contents: read
+      actions: write
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_AUTH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: LiquidBird-ipa
+          path: out
+
+      - name: Strip app extensions
+        run: |
+          mkdir out/x && unzip -q out/LiquidBird.ipa -d out/x && rm out/LiquidBird.ipa
+          rm -rf out/x/Payload/*.app/{PlugIns,Extensions,Watch,AppClips}
+          (cd out/x && zip -qry ../unsigned.ipa Payload) && rm -rf out/x
+
+      - name: Sign
+        run: |
+          command -v fastlane >/dev/null || brew install fastlane
+          fastlane adhoc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiquidBird-adhoc
+          path: out/LiquidBird.ipa
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Delete the unsigned artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/${{ needs.ipa.outputs.artifact }}"
