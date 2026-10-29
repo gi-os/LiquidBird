@@ -9,7 +9,9 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 4. Ads, premium upsells and banners: rely on NeoFreeBird's BHTwitter toggles first; hook only what survives.
 
 ## Layout
-- `Tweak.x`             all hooks (Logos)
+- `Tweak.x`             Grok/Live removal; defaults for NeoFreeBird's own toggles (liquid_glass, hide_quick_compose, hide_spaces, Grok, ads) via registerDefaults, since Giovanni can't reach its settings; collapses the live sports carousel
+- `Tiling.x`            iPhone Duo's wide poses (window >= 600pt): Twitter for iPad's layout after gi-os/twitter's TabStackView/ClassicSidebar, in Liquid Glass. A glass column in the trailing strip the status bar runs down: a rail of the tabs (Grok left out), compose (XTabbedAppNavigationViewController handleComposeTweetKeyCommand; X's own + fades out) and a gear opening NeoFreeBird's settings (BHTManager BHTSettingsWithAccount:, whose own Settings row doesn't show on these layouts). The rail mirrors X's glass tab bar (XNavigation TabBarItemView, selected with accessibilityActivate) or the older T1TabBarViewController; the tab bar fades out meanwhile. With room for two columns the current tab is a centred column card. Step 2 (todo): tweets/profiles/links open as further columns.
+- `Debug.x`             three-finger long press copies the view/VC hierarchy (classes and frames, no text) for Giovanni to paste; how class names get verified without FLEX
 - `LiquidBird.plist`    bundle filter (com.atebits.Tweetie2)
 - `scripts/patch_glass.sh <in.ipa> <out.ipa>`  strips UIDesignRequiresCompatibility so stock UIKit chrome gets Liquid Glass; raises the Mach-O SDK to 26.0 only if it's older (never lowers it, keeps minos). Needs Xcode `vtool`, macOS only
 - `scripts/build.sh`    full pipeline: fetch NeoFreeBird IPA, patch, `make package`, inject with `cyan`
@@ -20,8 +22,10 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 ## Rules
 - Class names marked `// placeholder` are unverified. Confirm in FLEX before relying on them: the IPA already ships BHTwitter's FLEX (`libbhFLEX.dylib`, try its toggle in BHTwitter settings first), else inject FLEXing (`scripts/build.sh --flex <FLEXing.deb>`, or run the workflow with `flex`). Placeholder hooks live in their own `%group`, initialised in `%ctor` only if `objc_getClass` finds the class; keep it that way (Logos doesn't check, and a nil class can crash at launch). Prefer matching on accessibilityLabel/identifier over private class names; they survive app updates.
 - Guard every iOS 26 API with `if (@available(iOS 26, *))`. Deployment target stays 15.0.
-- No global hooks on `UIView -layoutSubviews`; too hot. `UIControl -didMoveToWindow` is the widest acceptable hook.
+- Finding classes: `nm`/strings miss most of them; dump ObjC metadata (class and category method lists) from the frameworks in the NeoFreeBird IPA (T1Twitter, XServiceLibraries, XAppLibraries hold the app). Navigation: T1TabbedAppNavigationViewController (tabs, `currentTabNavigationController`), T1TabBarViewController (`tabViews`, `setTabBarHidden:withDuration:completion:`), TFNCustomTabBar, TFNFloatingActionButton, T1TabNavigationController (`showComposeFromBarButtonItem:`).
+- No global hooks on `UIView -layoutSubviews`; too hot. `UIControl` and `UIScrollView -didMoveToWindow` are the widest acceptable hooks.
 - Never commit IPAs, decrypted binaries, or signing certs. `.gitignore` covers them.
+- The repo is public (free macOS minutes), so the signed IPA (its ad-hoc profile lists the devices) goes up encrypted to the Mac mini: a one-time key encrypted to `artifact-key.pub.pem`, whose private half is only `~/.config/liquidbird/artifact-key.pem` there (`scripts/install_link.sh` decrypts). The unsigned IPA between jobs is NeoFreeBird's public app plus this tweak, and is deleted once signed. Logs must not list devices; a UDID passed as a dispatch input shows in that run.
 - Signing secrets (synced from the gi-os/ios-certs hub) go only to the `sign` job, which runs no third-party code; never pass them to `ipa`. Registered so far: Giovanni's iPhone and iPad; the ad-hoc profile lasts until Sep 2027.
 
 ## Commands
