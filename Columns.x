@@ -55,6 +55,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 @interface LBCStrip : UIView <UIScrollViewDelegate>
 @property (nonatomic, weak) UINavigationController *rootNavigation;   // the tab's own stack
+@property (nonatomic) BOOL fromLeading;   // with the feed on the right, columns open over the left side
 @property (nonatomic, weak) UIViewController *parent;                 // the columns' container
 @property (nonatomic, readonly) NSUInteger count;
 - (void)open:(UIViewController *)vc after:(UINavigationController *)from animated:(BOOL)animated;
@@ -97,8 +98,8 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 - (NSUInteger)count { return _cards.count; }
 - (CGFloat)columnWidth { return round(MIN(LBCPreferred, self.bounds.size.width - LBCSliver)); }
-// Where the first column rests: past the root's sliver.
-- (CGFloat)firstColumnX { return self.bounds.size.width - self.columnWidth; }
+// Where the first column rests: past the root's sliver, or at the leading edge with the feed on the right.
+- (CGFloat)firstColumnX { return self.fromLeading ? 0 : self.bounds.size.width - self.columnWidth; }
 
 // Outside the columns the strip takes the touch (a tap there closes them all); a touch on a column marks
 // it as the one the next push comes from.
@@ -351,6 +352,71 @@ static UINavigationController *LBCExploreTab(UIViewController *tabs) {
     return nil;
 }
 
+static BOOL LBCFeedOnRight(void) { return [NSUserDefaults.standardUserDefaults boolForKey:@"liquidbird_feed_right"]; }
+
+// A two-finger swipe left or right moves the feed to that side, Explore to the other (one finger stays
+// the timelines' own swipe between For you and Following).
+@interface LBCSwipe : NSObject <UIGestureRecognizerDelegate>
+@property (nonatomic, weak) UIViewController *tabs;
+@end
+
+@implementation LBCSwipe
+- (void)swiped:(UIPanGestureRecognizer *)pan {
+    if (pan.state != UIGestureRecognizerStateEnded) return;
+    CGPoint d = [pan translationInView:pan.view];
+    if (fabs(d.x) < 60 || fabs(d.x) < 2 * fabs(d.y)) return;
+    BOOL right = d.x > 0;
+    if (right == LBCFeedOnRight()) return;
+    [NSUserDefaults.standardUserDefaults setBool:right forKey:@"liquidbird_feed_right"];
+    UIView *view = self.tabs.viewIfLoaded;
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:0 animations:^{
+        [view setNeedsLayout];
+        [view layoutIfNeeded];
+    } completion:nil];
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+    return YES;
+}
+@end
+
+static const void *kLBCSwipe = &kLBCSwipe;
+
+static void LBCInstallSwipe(UIWindow *w, UIViewController *tabs) {
+    LBCSwipe *swipe = objc_getAssociatedObject(w, kLBCSwipe);
+    if (swipe) { swipe.tabs = tabs; return; }
+    swipe = [LBCSwipe new];
+    swipe.tabs = tabs;
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:swipe action:@selector(swiped:)];
+    pan.minimumNumberOfTouches = 2;
+    pan.maximumNumberOfTouches = 2;
+    pan.cancelsTouchesInView = NO;
+    pan.delegate = swipe;
+    [w addGestureRecognizer:pan];
+    objc_setAssociatedObject(w, kLBCSwipe, swipe, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// As the panel, Explore keeps its search and pages but not its bar's buttons (the gear, the +), which
+// iOS 27 shows in a floating bar beside it; they come back when Explore is the selected tab.
+static const void *kLBCSavedGroups = &kLBCSavedGroups;
+
+static void LBCTrimExploreBar(UINavigationController *explore, BOOL panel) {
+    UIViewController *top = explore.viewControllers.firstObject;
+    UINavigationItem *item = top.navigationItem;
+    if (@available(iOS 16, *)) {
+        NSArray *saved = objc_getAssociatedObject(top, kLBCSavedGroups);
+        if (panel && item.trailingItemGroups.count) {
+            objc_setAssociatedObject(top, kLBCSavedGroups, item.trailingItemGroups, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            item.trailingItemGroups = @[];
+        } else if (!panel && saved) {
+            item.trailingItemGroups = saved;
+            objc_setAssociatedObject(top, kLBCSavedGroups, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+    Class floating = objc_getClass("_UIFloatingBarContainerView");
+    for (UIView *v in explore.viewIfLoaded.subviews)
+        if (floating && [v isKindOfClass:floating]) v.hidden = panel;
+}
+
 // Lays the tabs out: Explore as the panel on the right and the selected tab narrowed beside it, or both
 // as X has them.
 static void LBCLayoutPanel(UIViewController *tabs) {
@@ -381,19 +447,25 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         [exploreView setHidden:LBCWantsHidden(exploreView)];   // re-evaluated by the hook below
     }
     CGFloat width = view.bounds.size.width;
+    CGFloat panelWidth = [view convertRect:CGRectMake(0, 0, LBCPanelWidth(w), 1) fromView:nil].size.width;
     CGFloat feed = panel ? [view convertRect:CGRectMake(0, 0, LBCAvailable(w) - LBCPanelWidth(w), 1) fromView:nil].size.width : width;
+    // A two-finger swipe puts the feed on either side (LBCSwiped).
+    BOOL right = panel && LBCFeedOnRight();
     for (UIViewController *c in tabs.childViewControllers) {
         UIView *v = c.viewIfLoaded;
         if (!v || ![c isKindOfClass:UINavigationController.class]) continue;
         CGRect f = v.frame;
         if (c == explore && panel) {
-            f = CGRectMake(feed, 0, [view convertRect:CGRectMake(0, 0, LBCPanelWidth(w), 1) fromView:nil].size.width, view.bounds.size.height);
+            f = CGRectMake(right ? 0 : feed, 0, panelWidth, view.bounds.size.height);
         } else {
-            f.origin.x = 0;
+            f.origin.x = right ? panelWidth : 0;
             f.size.width = feed;
         }
         if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
     }
+    if (explore.isViewLoaded) LBCTrimExploreBar(explore, panel);
+    LBCStripFor(w, NO).fromLeading = right;
+    LBCInstallSwipe(w, tabs);
 }
 
 %group Columns
