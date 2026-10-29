@@ -263,8 +263,29 @@ static LBCStrip *LBCStripFor(UIViewController *tabs, BOOL create) {
     return strip;
 }
 
+// In the tab's own stack X's chrome keeps a screen's content below the bar; a column's navigation isn't
+// one of X's tabs, so it's done here: the top screen's safe area reaches down to the bar's bottom.
+static void LBCKeepBelowBar(UINavigationController *nav) {
+    UIViewController *top = nav.topViewController;
+    UINavigationBar *bar = nav.navigationBar;
+    if (!top.isViewLoaded || !bar) return;
+    BOOL shown = !nav.navigationBarHidden && !bar.hidden && bar.alpha > 0.01;
+    CGFloat barBottom = shown ? CGRectGetMaxY([nav.view convertRect:bar.bounds fromView:bar]) : 0;
+    CGFloat base = top.view.safeAreaInsets.top - top.additionalSafeAreaInsets.top;
+    CGFloat need = MAX(0, round(barBottom - base));
+    UIEdgeInsets extra = top.additionalSafeAreaInsets;
+    if (fabs(extra.top - need) < 0.5) return;
+    extra.top = need;
+    top.additionalSafeAreaInsets = extra;
+}
+
 %group Columns
 %hook XNAVNavigationController
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (objc_getAssociatedObject(self, kLBCColumnOf)) LBCKeepBelowBar(self);
+}
+
 - (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
     if (LBCPassThrough || !vc || self.viewControllers.count == 0) { %orig; return; }
     UIWindow *w = self.viewIfLoaded.window;
