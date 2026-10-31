@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES = Twitter
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = LiquidBird
-LiquidBird_FILES = Tweak.x Tiling.x Debug.x
+LiquidBird_FILES = Tweak.x Tiling.x Columns.x Debug.x
 LiquidBird_CFLAGS = -fobjc-arc
 LiquidBird_FRAMEWORKS = UIKit
 
