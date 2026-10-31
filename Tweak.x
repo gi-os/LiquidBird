@@ -14,6 +14,7 @@
 @interface TAVPlayerViewConfiguration : NSObject
 - (BOOL)isFullscreen;
 @end
+@interface T1ImmersiveDockMorphAnimator : NSObject @end
 
 // ---------- helpers ----------
 
@@ -209,9 +210,24 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
 // T1ImmersiveFullScreenViewController -tavPlayerViewConfiguration and the immersive page views
 // (ImmersiveStandaloneVideoPageView and the rest). 0 is fit, as T1InlineMediaView picks when
 // isVideoAspectFitGravityPreferred. Full screen, a video fits; a pinch still zooms it to fill.
+// Except while a video shrinks into X's dock on its way out (T1ImmersiveDockMorphAnimator copies the viewer's
+// configuration and asks for fill to match the dock's thumbnail, which it lays out then and there).
+static BOOL LBDockMorph;
+
 %group VideoFit
 %hook TAVPlayerViewConfiguration
-- (NSInteger)outputViewVideoGravity { return [self isFullscreen] ? 0 : %orig; }
+- (NSInteger)outputViewVideoGravity { return [self isFullscreen] && !LBDockMorph ? 0 : %orig; }
+%end
+%end
+
+%group DockMorph
+%hook T1ImmersiveDockMorphAnimator
++ (BOOL)runMorphWithImmersiveContainerView:(id)container immersivePlayerView:(id)player videoAspectRatio:(double)ratio callbacks:(id)callbacks {
+    LBDockMorph = YES;
+    BOOL ran = %orig;
+    LBDockMorph = NO;
+    return ran;
+}
 %end
 %end
 
@@ -243,6 +259,7 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
     }];
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TAVPlayerViewConfiguration")) %init(VideoFit);
+    if (objc_getClass("T1ImmersiveDockMorphAnimator")) %init(DockMorph);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
     if (objc_getClass("XNAVNavigationController") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(ImmersiveWrapper);
     if (objc_getClass("T1ImmersiveFullScreenViewController") && objc_getClass("_TtC14T1TwitterSwift35MultiImmersiveViewControllerManager") &&
