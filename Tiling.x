@@ -2,21 +2,20 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// Twitter for iPad's layout on the iPhone Duo's wide poses, after gi-os/twitter's TabStackView and
+// Twitter for iPad's layout on the iPhone Duo, after gi-os/twitter's TabStackView and
 // ClassicSidebar, in Liquid Glass. Down the strip the status bar sits in on the trailing edge: a small
 // Twitter logo (tap: NeoFreeBird's settings; long-press: a menu with the slide-over menu, which the
 // hidden Home top bar's avatar opened, and the unfolded layout's settings), a glass rail of the tabs (Grok left out), and compose (unless NeoFreeBird's
-// "hide tweet button" is on), in place of the tab bar and X's own compose button; where there's room
-// for two columns, the current tab is a column card centred on a backdrop.
-// Narrow windows (folded) stay stock. Step 1 of 2; step 2 opens tweets, profiles and links as
-// further columns.
+// "hide tweet button" is on), in place of the tab bar and X's own compose button. It shows wherever the
+// window is wider than an iPhone held upright or has the Duo's side strip (folded too); ordinary iPhones
+// held upright stay stock. Step 1 of 2; step 2 (Columns.x) opens tweets, profiles and links as further
+// columns and puts Explore beside the feed.
 //
 // The rail mirrors whichever tab bar the app is using: X's Liquid Glass one (XNavigation's
 // TabBarView of TabBarItemViews, which select on accessibilityActivate, as VoiceOver does) or the
 // older T1TabBarViewController (tabViews, selected through its delegate, as a tap is).
 
 @interface T1TabbedAppNavigationViewController : UIViewController
-- (UIViewController *)selectedViewController;
 - (void)tabBarViewController:(id)tabBarViewController selectTabAtIndex:(NSInteger)index withView:(UIView *)view;
 @end
 
@@ -49,9 +48,6 @@
 @interface _TtC13XDesignSystem19ScrollEdgeTreatment : UIView
 @end
 
-static const CGFloat LBColumnWidth = 476;          // gi-os/twitter's ColumnLayout
-static const CGFloat LBMinimumColumnWidth = 400;
-static const CGFloat LBCardRadius = 26;
 static const CGFloat LBSidebarWindow = 600;        // wider than any iPhone held upright: the Duo's poses
 static const CGFloat LBGlassWidth = 52;
 static const CGFloat LBRow = 48;
@@ -68,19 +64,32 @@ void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown 
 
 // The strip down the trailing edge the Duo's status bar runs in (a safe area on that side only), or 0.
 // Hiding the status bar (the media viewer, the slide-over menu) takes the strip's inset away with it, so
-// it's remembered for the window's size: the sidebar stays and the layout under it doesn't change
-// meanwhile (T1HostViewController keeps the inset, below). Also Columns.x's.
+// it's remembered for each window size it's been seen at: the sidebar stays and the layout under it doesn't
+// change meanwhile (T1HostViewController keeps the inset, below), folding or unfolding under a photo too.
 CGFloat LBSideStrip(UIWindow *w) {
     if (!w) return 0;
     UIEdgeInsets safe = w.safeAreaInsets;
-    NSValue *size = [NSValue valueWithCGSize:w.bounds.size];
-    NSArray *seen = objc_getAssociatedObject(w, kLBSideStrip);
+    CGSize s = w.bounds.size;
+    NSValue *size = [NSValue valueWithCGSize:s];
+    NSMutableDictionary<NSValue *, NSNumber *> *seen = objc_getAssociatedObject(w, kLBSideStrip);
     if (safe.right >= 40 && safe.left < 20) {
-        if (![seen.lastObject isEqual:size] || fabs([seen.firstObject doubleValue] - safe.right) >= 0.5)
-            objc_setAssociatedObject(w, kLBSideStrip, @[@(safe.right), size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!seen) {
+            seen = [NSMutableDictionary dictionary];
+            objc_setAssociatedObject(w, kLBSideStrip, seen, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (fabs(seen[size].doubleValue - safe.right) >= 0.5) seen[size] = @(safe.right);
         return safe.right;
     }
-    return [seen.lastObject isEqual:size] ? [seen.firstObject doubleValue] : 0;
+    NSNumber *strip = seen[size];
+    // Turned sideways it's the same pose: folded, a photo turned with the phone makes the window 678x466.
+    if (!strip && seen) strip = seen[[NSValue valueWithCGSize:CGSizeMake(s.height, s.width)]];
+    return strip.doubleValue;
+}
+
+// The sidebar's width: the side strip, or a default where the safe area doesn't say. Also Columns.x's.
+CGFloat LBSidebarStrip(UIWindow *w) {
+    CGFloat r = LBSideStrip(w);
+    return r > 0 ? r : LBStripDefault;
 }
 
 // The Duo's poses: a window wider than an iPhone held upright, or one with the side strip.
@@ -138,7 +147,7 @@ static UIImage *LBTabImage(UIView *tab) {
 
 static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
     NSDictionary<NSString *, NSString *> *map = @{@"home": @"house", @"search": @"magnifyingglass",
-        @"explore": @"magnifyingglass", @"notification": @"bell", @"message": @"envelope", @"grok": @"sparkles",
+        @"explore": @"magnifyingglass", @"notification": @"bell", @"message": @"envelope",
         @"communit": @"person.2", @"profile": @"person", @"bookmark": @"bookmark", @"list": @"list.bullet"};
     NSString *name = @"circle";
     for (NSString *k in map)
@@ -151,6 +160,7 @@ static UIImage *LBFallbackImage(NSString *label, BOOL selected) {
 // MARK: - The sidebar
 
 void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
+void LBCCloseColumns(UIWindow *w);   // Columns.x: closes every column, without animation
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
 NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 full width, 1 right
 void LBCSetFeedPosition(NSInteger side);
@@ -221,6 +231,12 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     for (UIView *g in @[_logoGlass, _rail])
         if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
     return NO;
+}
+
+// The whole logo glass is the logo's: the bird inside is only 24pt of the 40pt circle.
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    return [hit isDescendantOfView:_logoGlass] ? _logo : hit;
 }
 
 - (void)tapped:(UIButton *)b { if (_activate) _activate(b.tag); }
@@ -392,10 +408,13 @@ static void LBToggleDash(UIWindow *w) {
         if ([x respondsToSelector:dismiss]) ((void (*)(id, SEL, BOOL, id))objc_msgSend)(x, dismiss, YES, nil);
         return;
     }
+    SEL present = NSSelectorFromString(@"presentDashFromViewController:animated:completion:");
+    if (![x respondsToSelector:present]) return;
+    // Unfolded, the columns' strip would lie over the menu and its first tap would close them: they go first.
+    LBCCloseColumns(w);
     UINavigationController *nav = (UINavigationController *)LBFindVC(x, objc_getClass("XNAVNavigationController"), 0);
     UIViewController *from = nav.topViewController ?: x;
-    SEL present = NSSelectorFromString(@"presentDashFromViewController:animated:completion:");
-    if ([x respondsToSelector:present]) ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(x, present, from, YES, nil);
+    ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(x, present, from, YES, nil);
 }
 
 static UIView *LBFindView(UIView *v, Class cls, NSInteger depth) {
@@ -431,8 +450,7 @@ static BOOL LBIsGrokTab(UIView *tab) {
 
 // The strip down the trailing edge: the safe area there, which the status bar's strip is, or a default.
 static CGFloat LBStripWidth(UIView *host) {
-    CGFloat r = LBSideStrip(host.window);
-    return r > 0 ? r : LBStripDefault;
+    return LBSidebarStrip(host.window);
 }
 
 // Under the status bar. Where it runs down the side (the Duo: no top safe area), iOS reports it as a
@@ -539,9 +557,15 @@ static CGFloat LBBarAlpha(UIView *v, CGFloat wanted) {
     return LBSidebarWanted(v.window) ? 0 : wanted;
 }
 
+// The window's glass tab bar, held weakly: X builds a new one when it rebuilds the app (signing in
+// again, switching accounts) and frees the old.
+static UIView *LBGlassTabBarOf(UIWindow *w) {
+    return [(NSHashTable *)objc_getAssociatedObject(w, kLBGlassTabBar) anyObject];
+}
+
 // For Columns.x: the selected tab's name, through X's glass tab bar.
 NSString *LBSelectedTabLabel(UIWindow *w) {
-    UIView *tabBar = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue];
+    UIView *tabBar = LBGlassTabBarOf(w);
     if (!tabBar.window) return nil;
     NSArray<UIView *> *tabs = LBGlassTabs(tabBar);
     NSInteger i = LBGlassSelected(tabBar, tabs);
@@ -552,7 +576,12 @@ NSString *LBSelectedTabLabel(UIWindow *w) {
 static void LBSyncGlassTabBar(UIView *tabBar) {
     UIWindow *w = tabBar.window;
     if (!w) return;
-    objc_setAssociatedObject(w, kLBGlassTabBar, [NSValue valueWithNonretainedObject:tabBar], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSHashTable *held = objc_getAssociatedObject(w, kLBGlassTabBar);
+    if (!held) {
+        held = [NSHashTable weakObjectsHashTable];
+        objc_setAssociatedObject(w, kLBGlassTabBar, held, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (held.anyObject != tabBar) { [held removeAllObjects]; [held addObject:tabBar]; }
     NSArray<UIView *> *tabs = LBGlassTabs(tabBar);
     NSInteger selected = LBGlassSelected(tabBar, tabs);
     __weak UIView *weakBar = tabBar;
@@ -653,13 +682,13 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 // MARK: - Home's and an opened tweet's top bar
 
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
-// the slide-over menu the avatar did. X's navigation ignores setNavigationBarHidden: and the screen's
-// tfn_prefersNavigationBarHidden, and places its Bar itself (overriding frame and center), so on Home
-// the bar is faded out. The row of timelines under it (AccessoryStackView) and the timeline's insets
-// are laid out from X's own idea of the bar, so Home's whole view moves up by the band the bar leaves
-// (where X puts that row, less a small margin) and grows by as much at the bottom: the row comes to the
-// top and the first tweet stays right under it. Screens pushed over Home keep their bar, for the back
-// button.
+// NeoFreeBird's settings, and its long-press menu has the slide-over menu the avatar opened. X's navigation
+// ignores setNavigationBarHidden: and the screen's tfn_prefersNavigationBarHidden, and places its Bar
+// itself (overriding frame and center), so on Home the bar is faded out. The row of timelines under it
+// (AccessoryStackView) and the timeline's insets are laid out from X's own idea of the bar, so Home's
+// whole view moves up by the band the bar leaves (where X puts that row, less a small margin) and grows
+// by as much at the bottom: the row comes to the top and the first tweet stays right under it. Screens
+// pushed over Home keep their bar, for the back button, except an opened tweet (below).
 // The screens whose bar goes where the sidebar shows: Home (avatar and bird) and an opened tweet (just
 // "Tweet"; back is the left-edge swipe, or Home in the sidebar). Not in a column, whose bar holds its ✕.
 static BOOL LBHidesBar(UINavigationController *nav) {
@@ -688,6 +717,10 @@ static void LBShiftHome(UIViewController *home) {
     // Off screen (a tweet open over it), Home's safe area reads zero; measuring then would change the
     // timeline's inset and move its scroll position on the way back.
     if (!view || !container || !view.window) return;
+    // Folded, a photo turned sideways turns the feed under it, and its compact bar isn't Home's: measured
+    // only in the app's own pose (upright on a phone, Orientation below), placed with the kept values meanwhile.
+    UIWindow *w = view.window;
+    BOOL upright = w.bounds.size.width <= w.bounds.size.height || MIN(w.bounds.size.width, w.bounds.size.height) >= LBSidebarWindow;
     // X puts the row of timelines at its bar's bottom edge. Measured from the bar whenever it's fully
     // shown (not collapsed on scroll), as the latest value, not the largest ever seen: one odd layout
     // (unfolding) once left Home shifted far enough to hide the row.
@@ -698,7 +731,7 @@ static void LBShiftHome(UIViewController *home) {
     CGFloat rowHeight = 44;
     for (UIView *v in view.subviews) if (row && [v isKindOfClass:row]) rowHeight = v.frame.size.height;
     CGRect barFrame = bar.frame;
-    if (barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
+    if (upright && barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
         CGFloat measured = round(CGRectGetMaxY(barFrame) - 6);
         if (fabs(measured - shift) >= 0.5) {
             LBLog(@"Home shift %.0f -> %.0f (bar %@)", shift, measured, NSStringFromCGRect(barFrame));
@@ -737,7 +770,7 @@ static void LBShiftHome(UIViewController *home) {
     // back in from a tweet, its safe area reads as if unshifted for a moment), and kept: any change to it
     // moves the timeline's scroll position.
     CGFloat measured = [objc_getAssociatedObject(home, kLBHomeExtra) doubleValue];
-    BOOL settled = nav.topViewController == home && !nav.transitionCoordinator && fabs(view.frame.origin.y + shift) < 0.5;
+    BOOL settled = upright && nav.topViewController == home && !nav.transitionCoordinator && fabs(view.frame.origin.y + shift) < 0.5;
     if (hide && settled && rowBottom > 0) {
         CGFloat was = measured;
         measured = MAX(0, round(rowBottom - view.safeAreaInsets.top));
@@ -844,12 +877,18 @@ static void LBTrimEdgeTreatment(UIView *treatment) {
 // The carousel scrolls on by as much of it as the strip covers.
 static const void *kLBCarouselSize = &kLBCarouselSize;
 
+// How much of a carousel the strip covers (never more than the strip), or -1 where that can't be told: out
+// of the window (a tweet pushed over its timeline), or in a timeline page parked off to the side (For you /
+// Following, or sliding in), which isn't where it will show. Those keep what they had.
 static CGFloat LBUnderStrip(UIView *v) {
     UIWindow *w = v.window;
+    if (!w) return -1;
     CGFloat strip = LBSideStrip(w);
-    if (!w || strip <= 0) return 0;
+    if (strip <= 0) return 0;
     CGRect inWindow = [v convertRect:v.bounds toView:nil];
-    return MAX(0, round(CGRectGetMaxX(inWindow) - (w.bounds.size.width - strip)));
+    CGFloat width = w.bounds.size.width;
+    if (CGRectGetMinX(inWindow) < -0.5 || CGRectGetMinX(inWindow) > width - 0.5) return -1;
+    return MIN(strip, MAX(0, round(CGRectGetMaxX(inWindow) - (width - strip))));
 }
 
 static void LBRefitCarousel(UIScrollView *scroll) {
@@ -860,13 +899,22 @@ static void LBRefitCarousel(UIScrollView *scroll) {
 %group Carousel
 %hook _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView
 - (void)setContentSize:(CGSize)size {
+    NSValue *was = objc_getAssociatedObject(self, kLBCarouselSize);
     objc_setAssociatedObject(self, kLBCarouselSize, [NSValue valueWithCGSize:size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (size.width > self.bounds.size.width) size.width += LBUnderStrip(self);
+    CGFloat under = LBUnderStrip(self);
+    if (under < 0) under = was ? MAX(0, self.contentSize.width - was.CGSizeValue.width) : 0;   // the extra it had
+    if (size.width > self.bounds.size.width) size.width += under;
     if (!CGSizeEqualToSize(self.contentSize, size)) %orig(size);
 }
 - (void)didMoveToWindow {
     %orig;
     LBRefitCarousel(self);
+}
+// Measured again as a finger takes it, on screen: X lays a timeline page (For you / Following) out in its
+// paging cell while it's still off to the side, and nothing lays it out again once it's shown.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
+    if (g == self.panGestureRecognizer) LBRefitCarousel(self);
+    return %orig;
 }
 %end
 
@@ -904,7 +952,7 @@ static BOOL LBInsideHome(UIView *v) {
 %end
 %end
 
-// MARK: - The older tab bar, and the column card
+// MARK: - The older tab bar (Liquid Glass off)
 
 static UIViewController *LBChild(UIViewController *vc, Class cls, NSInteger depth) {
     if (!cls || depth > 4) return nil;
@@ -916,16 +964,9 @@ static UIViewController *LBChild(UIViewController *vc, Class cls, NSInteger dept
     return nil;
 }
 
-static UIColor *LBBackdrop(void) { return [UIColor colorWithRed:0.05 green:0.055 blue:0.065 alpha:1]; }
-
-static void LBUncard(UIView *card) {
-    if (card.layer.cornerRadius != LBCardRadius) return;
-    card.layer.cornerRadius = 0;
-    card.layer.masksToBounds = NO;
-    card.layer.borderWidth = 0;
-    if (card.superview) card.frame = card.superview.bounds;
-}
-
+// X builds T1TabbedAppNavigationViewController only with Liquid Glass off (T1MainAppNavigationProviderFactory
+// picks XTabbedAppNavigationViewController when XAppearance's isLiquidGlassEnabled, iOS 26 on), so this is the
+// rail for NeoFreeBird's Liquid Glass toggle turned off.
 static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     UIView *root = nav.viewIfLoaded;
     UIWindow *w = root.window;
@@ -933,16 +974,13 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     BOOL side = LBSidebarWanted(w);
     BOOL was = [objc_getAssociatedObject(nav, kLBTiled) boolValue];
     T1TabBarViewController *tb = (T1TabBarViewController *)LBChild(nav, objc_getClass("T1TabBarViewController"), 0);
-    UIViewController *selectedVC = [nav respondsToSelector:@selector(selectedViewController)] ? [nav selectedViewController] : nil;
-    UIView *card = selectedVC.viewIfLoaded;
     // With X's glass tab bar in this window, that drives the rail.
-    BOOL glass = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue] != nil;
+    BOOL glass = LBGlassTabBarOf(w) != nil;
 
     if (side != was) {
         objc_setAssociatedObject(nav, kLBTiled, @(side), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (!glass && [tb respondsToSelector:@selector(setTabBarHidden:withDuration:completion:)])
             [tb setTabBarHidden:side withDuration:0 completion:nil];
-        if (!side) LBUncard(card);
     }
     if (!side) return;
 
@@ -962,25 +1000,6 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
             [weakNav.viewIfLoaded setNeedsLayout];
         });
     }
-
-    // The current tab as a column card, where the space left of the strip holds two columns.
-    UIView *container = card.superview;
-    if (!container) return;
-    CGFloat strip = LBStripWidth(w.rootViewController.viewIfLoaded ?: root);
-    CGRect area = [container convertRect:CGRectMake(0, 0, root.bounds.size.width - strip, root.bounds.size.height) fromView:root];
-    if (area.size.width < 2 * LBMinimumColumnWidth) { LBUncard(card); return; }
-    root.backgroundColor = LBBackdrop();
-    if (container != root) container.backgroundColor = LBBackdrop();
-    // In from the top as far as the bottom keeps clear (gi-os/twitter's card margins).
-    CGFloat m = MAX(root.safeAreaInsets.bottom, 12);
-    CGFloat width = MIN(LBColumnWidth, area.size.width - 2 * m);
-    CGRect f = CGRectMake(round(CGRectGetMidX(area) - width / 2), CGRectGetMinY(area) + m, width, area.size.height - 2 * m);
-    if (!CGRectEqualToRect(card.frame, f)) card.frame = f;
-    card.layer.cornerRadius = LBCardRadius;
-    card.layer.cornerCurve = kCACornerCurveContinuous;
-    card.layer.masksToBounds = YES;
-    card.layer.borderWidth = 1 / MAX(root.traitCollection.displayScale, 1);
-    card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
 }
 
 %group Tiling
@@ -995,7 +1014,7 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 // The older tab bar stays hidden while the rail stands in for it (scrolling would otherwise bring it back).
 - (void)setTabBarHidden:(BOOL)hidden withDuration:(double)duration completion:(id)completion {
     UIWindow *w = self.viewIfLoaded.window;
-    BOOL glass = [objc_getAssociatedObject(w, kLBGlassTabBar) nonretainedObjectValue] != nil;
+    BOOL glass = LBGlassTabBarOf(w) != nil;
     %orig(hidden || (!glass && LBSidebarWanted(w)), duration, completion);
 }
 %end

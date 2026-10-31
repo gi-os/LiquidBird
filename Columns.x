@@ -32,19 +32,18 @@
 static const CGFloat LBCPreferred = 476, LBCMinimum = 400, LBCSliver = 160;
 static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns back onto the stack
 
-// The sidebar's strip down the trailing edge (Tiling.x): the safe area there, or its default.
-CGFloat LBSideStrip(UIWindow *w);   // Tiling.x: the status bar's strip, remembered while it's hidden
+CGFloat LBSidebarStrip(UIWindow *w);   // Tiling.x: the sidebar's width (the status bar's strip, or its default)
 void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
-static CGFloat LBCSidebarWidth(UIWindow *w) {
-    CGFloat r = LBSideStrip(w);
-    return r > 0 ? r : 66;
-}
+static CGFloat LBCAvailable(UIWindow *w) { return w ? w.bounds.size.width - LBSidebarStrip(w) : 0; }
 
-static CGFloat LBCAvailable(UIWindow *w) { return w ? w.bounds.size.width - LBCSidebarWidth(w) : 0; }
+// The Duo unfolded: the window's short side, which turning the phone doesn't change (folded, a photo
+// turned sideways makes the window 678pt wide, with the tabs turned under it).
+static const CGFloat LBCUnfoldedSide = 600;
+static BOOL LBCUnfolded(UIWindow *w) { return w && MIN(w.bounds.size.width, w.bounds.size.height) >= LBCUnfoldedSide; }
 
 // Room for a column and the sliver beside the sidebar: the Duo unfolded, not folded.
-static BOOL LBCColumnsWanted(UIWindow *w) { return LBCAvailable(w) >= LBCMinimum + LBCSliver; }
+static BOOL LBCColumnsWanted(UIWindow *w) { return LBCUnfolded(w) && LBCAvailable(w) >= LBCMinimum + LBCSliver; }
 
 @class LBCStrip;
 @interface LBColumnNavigationController : UINavigationController
@@ -134,6 +133,11 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     return YES;
 }
 
+// Only the sliver's touches: the columns' own taps (row selection runs on touchesEnded) are left alone.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
+    return touch.view == self;
+}
+
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesEnded:touches withEvent:event];
     UITouch *touch = touches.anyObject;
@@ -185,6 +189,17 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 
 - (CGFloat)endOffset { return MAX(0, _scroll.contentSize.width - _scroll.bounds.size.width); }
 
+// The feed moved to the other side: the open columns go over the other side too, the newest in view, as
+// open: leaves it.
+- (void)setFromLeading:(BOOL)fromLeading {
+    if (_fromLeading == fromLeading) return;
+    _fromLeading = fromLeading;
+    if (!_cards.count) return;
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    _scroll.contentOffset = CGPointMake(self.endOffset, 0);
+}
+
 // Shown in its own column, a screen closes rather than goes back.
 - (void)addCloseTo:(UIViewController *)vc {
     UIBarButtonItem *close = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"xmark"]
@@ -206,19 +221,32 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 - (void)open:(UIViewController *)vc after:(UINavigationController *)from animated:(BOOL)animated {
     NSUInteger found = from ? [_navigations indexOfObject:from] : NSNotFound;
     [self closeAfter:found == NSNotFound ? -1 : (NSInteger)found animated:NO];
+    NSInteger kept = (NSInteger)_cards.count - 1;
     UIViewController *parent = self.parent;
-    UINavigationController *nav = LBCMakeNavigation(vc);
-    ((LBColumnNavigationController *)nav).strip = self;
-    [parent addChildViewController:nav];
-    UIView *card = [self cardFor:nav];
-    [_cards addObject:card];
-    [_navigations addObject:nav];
-    [_scroll addSubview:card];
-    [nav didMoveToParentViewController:parent];
-    [self addCloseTo:vc];
-    self.hidden = NO;
-    [self setNeedsLayout];
-    [self layoutIfNeeded];
+    UINavigationController *nav = nil;
+    UIView *card = nil;
+    @try {
+        nav = LBCMakeNavigation(vc);
+        ((LBColumnNavigationController *)nav).strip = self;
+        [parent addChildViewController:nav];
+        card = [self cardFor:nav];
+        [_cards addObject:card];
+        [_navigations addObject:nav];
+        [_scroll addSubview:card];
+        [nav didMoveToParentViewController:parent];
+        [self addCloseTo:vc];
+        self.hidden = NO;
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    } @catch (NSException *e) {
+        // Nothing half-made is left behind (no empty column, no ✕ that closes nothing): the caller pushes vc
+        // as usual, with its own back button.
+        [self closeAfter:kept animated:NO];
+        if (nav.parentViewController) [nav removeFromParentViewController];
+        if (vc.navigationItem.leftBarButtonItem.target == self) vc.navigationItem.leftBarButtonItem = nil;
+        if (vc.parentViewController) [vc removeFromParentViewController];
+        @throw;
+    }
     // The newest column slides in at the trailing edge, the strip with it.
     CGFloat end = self.endOffset;
     if (animated && !UIAccessibilityIsReduceMotionEnabled()) {
@@ -286,16 +314,27 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     LBCPassThrough = NO;
 }
 
-// Throws every column off toward one side, then closes them.
+// Throws every column off toward one side, then closes them. Like closeAfter:, they're out of the strip
+// from the start, so a tap meanwhile reaches the tab rather than sending them back, and a fold has
+// nothing to put back on the stack.
 - (void)throwAwayToLeft:(BOOL)left {
     NSArray<UIView *> *cards = [_cards copy];
+    NSArray<UINavigationController *> *navigations = [_navigations copy];
+    [_cards removeAllObjects];
+    [_navigations removeAllObjects];
+    for (UINavigationController *nav in navigations) [nav willMoveToParentViewController:nil];
     CGFloat distance = (self.bounds.size.width + 40) * (left ? -1 : 1);
     [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
         for (UIView *card in cards) card.transform = CGAffineTransformMakeTranslation(distance, 0);
         self->_dim.alpha = 0;
     } completion:^(BOOL finished) {
-        [self closeAfter:-1 animated:NO];
-        self->_scroll.contentOffset = CGPointZero;
+        for (NSUInteger i = 0; i < cards.count; i++) [self remove:cards[i] navigation:navigations[i]];
+        // A column opened meanwhile stays.
+        if (!self->_cards.count) {
+            self.hidden = YES;
+            self->_scroll.contentOffset = CGPointZero;
+        }
+        [self setNeedsLayout];
     }];
 }
 
@@ -380,7 +419,7 @@ static const void *kLBCHint = &kLBCHint;
 // Tiling.x: the selected tab's name.
 NSString *LBSelectedTabLabel(UIWindow *w);
 
-static BOOL LBCPanelWanted(UIWindow *w) { return LBCAvailable(w) >= LBCWide; }
+static BOOL LBCPanelWanted(UIWindow *w) { return LBCUnfolded(w) && LBCAvailable(w) >= LBCWide; }
 static CGFloat LBCPanelWidth(UIWindow *w) {
     return round(MIN(LBCPanelMaximum, MAX(LBCPanelMinimum, LBCAvailable(w) * 0.4)));
 }
@@ -426,6 +465,22 @@ static BOOL LBCExploreEnabled(void) {
 
 @implementation LBCSwipe
 - (void)swiped:(UIPanGestureRecognizer *)pan {
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        // Two fingers move the feed, not X's pages under them (For you / Following, Explore's tabs): their
+        // drag is cancelled and they settle back on their page. Pages X has locked stay locked.
+        for (NSUInteger i = 0; i < pan.numberOfTouches; i++) {
+            UIView *hit = [pan.view hitTest:[pan locationOfTouch:i inView:pan.view] withEvent:nil];
+            for (UIView *s = hit; s; s = s.superview) {
+                if (![s isKindOfClass:UIScrollView.class]) continue;
+                UIScrollView *scroll = (UIScrollView *)s;
+                UIPanGestureRecognizer *drag = scroll.panGestureRecognizer;
+                if (!drag.enabled || scroll.contentSize.width <= scroll.bounds.size.width + 1) continue;
+                drag.enabled = NO;
+                drag.enabled = YES;
+            }
+        }
+        return;
+    }
     if (pan.state != UIGestureRecognizerStateEnded) return;
     CGPoint d = [pan translationInView:pan.view];
     if (fabs(d.x) < 60 || fabs(d.x) < 2 * fabs(d.y)) return;
@@ -444,6 +499,12 @@ static BOOL LBCExploreEnabled(void) {
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
     return YES;
 }
+// Only the tabs' own touches where the feed has sides: not the media viewer or sheets over them, not the
+// columns or the sidebar, not folded.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
+    UIView *view = self.tabs.viewIfLoaded;
+    return view && LBCPanelWanted(view.window) && [touch.view isDescendantOfView:view];
+}
 @end
 
 static const void *kLBCSwipe = &kLBCSwipe;
@@ -451,6 +512,11 @@ static const void *kLBCSwipe = &kLBCSwipe;
 // For the sidebar logo's menu (Tiling.x), after a setting changes.
 void LBCRelayout(UIWindow *w) {
     [(LBCSwipe *)objc_getAssociatedObject(w, kLBCSwipe) relayout];
+}
+
+// For the sidebar logo's menu (Tiling.x): the slide-over menu opens under the strip, so the columns go first.
+void LBCCloseColumns(UIWindow *w) {
+    [LBCStripFor(w, NO) closeAfter:-1 animated:NO];
 }
 
 static void LBCInstallSwipe(UIWindow *w, UIViewController *tabs) {
@@ -512,8 +578,8 @@ static void LBCShowHint(UIView *tabsView, BOOL show) {
     [tabsView bringSubviewToFront:hint];
 }
 
-// Lays the tabs out: Explore as the panel on the right and the selected tab narrowed beside it, or both
-// as X has them.
+// Lays the tabs out: Explore as the panel on the feed's other side and the selected tab narrowed beside
+// it, or both as X has them.
 static void LBCLayoutPanel(UIViewController *tabs) {
     UIView *view = tabs.viewIfLoaded;
     UIWindow *w = view.window;
@@ -558,6 +624,10 @@ static void LBCLayoutPanel(UIViewController *tabs) {
         objc_setAssociatedObject(exploreView, kLBCPanelRect, panel ? [NSValue valueWithCGRect:inExplore] : nil,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (panel) {
+            // In front of the tabs X made after it (a tab stays where X first added it): their full-width
+            // views would take the panel's touches. Outside its strip, touches still fall through to the feed.
+            if (exploreView.superview.subviews.lastObject != exploreView)
+                [exploreView.superview bringSubviewToFront:exploreView];
             CALayer *mask = exploreView.layer.mask ?: [CALayer layer];
             mask.backgroundColor = UIColor.blackColor.CGColor;
             mask.frame = inExplore;
@@ -569,7 +639,8 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     }
     if (explore.isViewLoaded) LBCTrimExploreBar(explore, panel);
     if (wide) view.backgroundColor = UIColor.blackColor;   // beside the feed, with no Explore there
-    LBCStripFor(w, NO).fromLeading = right;
+    // Folded the side means nothing: the columns are about to go back on the stack.
+    if (wide) LBCStripFor(w, NO).fromLeading = right;
     LBCInstallSwipe(w, tabs);
 }
 
@@ -607,6 +678,8 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
     @try {
         if (strip.rootNavigation != self) [strip closeAfter:-1 animated:NO];
         strip.rootNavigation = self;
+        // As LBCLayoutPanel has it, which can't reach the strip before the first push makes it.
+        strip.fromLeading = LBCPanelWanted(w) && LBCFeedOnRight();
         // After the column last touched, or from the root (the sliver), replacing every column.
         LBLog(@"column for %@", NSStringFromClass(vc.class));
         [strip open:vc after:strip.touchedColumn animated:animated];
@@ -657,8 +730,18 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
     LBCStrip *strip = LBCStripFor(w, NO);
     if (!strip.count) return;
     UINavigationController *root = strip.rootNavigation;
-    if (!LBCColumnsWanted(self.viewIfLoaded.window)) [strip foldBackOntoStack];
-    else if (!root.viewIfLoaded.window || root.view.hidden) [strip closeAfter:-1 animated:NO];
+    if (!LBCColumnsWanted(self.viewIfLoaded.window)) {
+        // Columns from the Explore panel, which folding hides, go on the tab that's showing instead.
+        if (root.viewIfLoaded.hidden)
+            for (UIViewController *c in self.childViewControllers)
+                if ([c isKindOfClass:UINavigationController.class] && c.viewIfLoaded.window && !c.view.hidden) {
+                    strip.rootNavigation = (UINavigationController *)c;
+                    break;
+                }
+        [strip foldBackOntoStack];
+    } else if (!root.viewIfLoaded.window || root.view.hidden) {
+        [strip closeAfter:-1 animated:NO];
+    }
 }
 %end
 %end
