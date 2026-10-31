@@ -916,7 +916,7 @@ static void LBRefitCarousel(UIScrollView *scroll) {
     CGFloat had = was ? MAX(0, self.contentSize.width - was.CGSizeValue.width) : 0;   // the extra it had
     objc_setAssociatedObject(self, kLBCarouselSize, [NSValue valueWithCGSize:size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     CGFloat extra = 0;
-    if (size.width > self.bounds.size.width) {
+    if (size.width + self.contentInset.left > self.bounds.size.width) {   // scrolls at all, as X judges it (its leading inset counts)
         extra = LBUnderStrip(self);
         if (extra < 0) extra = had;
         // In the layout copy, as it changes: where X put the scroll view, to check what it was given by.
