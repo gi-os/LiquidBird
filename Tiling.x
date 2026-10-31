@@ -32,6 +32,7 @@
 @end
 @interface _TtC11XNavigation25TabBarChromeContainerView : UIView @end
 @interface _TtC21TweetMediaAttachments22MultiMediaCarouselView : UIView @end
+@interface _TtC14T1TwitterSwift24InlineActionsFloatingBar : UIView @end
 @interface _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView : UIScrollView @end
 @interface _TtC11XNavigation25TabBarAccessoryButtonView : UIView
 @end
@@ -111,6 +112,37 @@ static void LBKeepSideStrip(UIViewController *root) {
     LBLog(@"root right inset %.0f -> %.0f (strip %.0f, system %.0f)", extra.right, want, strip, w.safeAreaInsets.right);
     extra.right = want;
     root.additionalSafeAreaInsets = extra;
+}
+
+// X's own screens end where the sidebar's strip begins rather than running on under it: what X lays out from its
+// view's width instead of the safe area (an article's floating action bar, scroll bars, the docks) went under the
+// sidebar. T1HostViewController gives its child (XTabbedAppNavigationViewController) its whole bounds once,
+// autoresizing, and never lays it out again, so the child is narrowed here. Inside, the right safe area is then 0, and
+// X's layout metrics take the window's side insets only for a view exactly as wide as the window, so the text keeps
+// its width (folded, 382pt either way). The columns (LBCStrip) place themselves; what's presented (sheets, the media
+// viewer) sits in the window's own transition views, full width.
+static const void *kLBContentNarrowed = &kLBContentNarrowed;
+
+static void LBFitContent(UIViewController *root) {
+    UIView *host = root.viewIfLoaded;
+    UIWindow *w = host.window;
+    if (!w || w.rootViewController != root) return;
+    UIView *bar = objc_getAssociatedObject(w, kLBSidebar);
+    CGFloat strip = bar.superview == host && LBSidebarWanted(w) ? LBSidebarStrip(w) : 0;   // the width LBUpdateSidebar gives it
+    BOOL was = [objc_getAssociatedObject(host, kLBContentNarrowed) boolValue];
+    if (strip <= 0 && !was) return;   // ordinary iPhones held upright: X's own frames, untouched
+    objc_setAssociatedObject(host, kLBContentNarrowed, @(strip > 0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGRect frame = host.bounds;
+    frame.size.width = MAX(0, frame.size.width - strip);
+    Class columns = objc_getClass("LBCStrip");
+    for (UIViewController *c in root.childViewControllers) {
+        UIView *v = c.viewIfLoaded;
+        if (!v || v.superview != host || (columns && [v isKindOfClass:columns])) continue;
+        if (CGRectEqualToRect(v.frame, frame)) continue;
+        LBLog(@"content %@ %@ -> %@ (strip %.0f)", NSStringFromClass(c.class), NSStringFromCGRect(v.frame),
+              NSStringFromCGRect(frame), strip);
+        v.frame = frame;
+    }
 }
 
 static UIVisualEffectView *LBGlassView(UIColor *tint) {
@@ -464,7 +496,12 @@ static CGFloat LBStatusBottom(UIView *host) {
 static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger selected, void (^activate)(NSInteger)) {
     LBSidebar *bar = objc_getAssociatedObject(w, kLBSidebar);
     UIView *host = w.rootViewController.viewIfLoaded;
-    if (!host || !LBSidebarWanted(w) || tabs.count == 0) { [bar removeFromSuperview]; return; }
+    if (!host || !LBSidebarWanted(w) || tabs.count == 0) {
+        UIView *was = bar.superview;
+        [bar removeFromSuperview];
+        [was setNeedsLayout];   // X's screens take the strip back (LBFitContent)
+        return;
+    }
     if (!bar) {
         bar = [[LBSidebar alloc] initWithFrame:CGRectZero];
         __weak UIWindow *weakWindow = w;
@@ -484,7 +521,10 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
         [index addObject:@(i)];
     }
     CGFloat strip = LBStripWidth(host);
-    if (bar.superview != host) [host addSubview:bar];
+    if (bar.superview != host) {
+        [host addSubview:bar];
+        [host setNeedsLayout];   // X's screens give the strip up (LBFitContent)
+    }
     [host bringSubviewToFront:bar];
     bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
     bar.top = LBStatusBottom(host);
@@ -951,6 +991,33 @@ static void LBRefitCarousel(UIScrollView *scroll) {
 %end
 %end
 
+// MARK: - An article's action bar
+
+// An X Article (T1ArticleViewController) floats its reply/repost/like/bookmark bar (InlineActionsFloatingBar, a
+// subview of the article's view) over the text, placed by frame 16pt in from both sides of the view whatever its safe
+// area, though the text keeps to it. X's screens end at the sidebar (LBFitContent), but where an article's view does
+// reach the side strip (shown over the app, or before the sidebar has taken its strip) the bar ran on under it: it
+// ends the same 16pt short of the safe area instead. X sets that frame again as the article lays out, as its safe area
+// changes and on every scroll (the bar slides away as you read), so it's kept here rather than fixed once.
+static CGRect LBFitArticleBar(UIView *bar, CGRect frame) {
+    UIView *article = bar.superview;
+    CGFloat inset = article.safeAreaInsets.right;
+    if (inset < 1) return frame;
+    CGFloat margin = MAX(0, CGRectGetMinX(frame));   // X's 16pt from the leading edge
+    CGFloat end = article.bounds.size.width - inset - margin;
+    if (CGRectGetMaxX(frame) <= end + 0.5 || end - CGRectGetMinX(frame) < 100) return frame;
+    frame.size.width = end - CGRectGetMinX(frame);
+    return frame;
+}
+
+%group ArticleBar
+%hook _TtC14T1TwitterSwift24InlineActionsFloatingBar
+- (void)setFrame:(CGRect)frame {
+    %orig(LBFitArticleBar(self, frame));
+}
+%end
+%end
+
 // MARK: - Scroll edge effects
 
 // iOS 26 blurs a scroll view's edge where a bar sits over it. With the tab bar replaced by the sidebar,
@@ -1059,10 +1126,12 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 - (void)viewSafeAreaInsetsDidChange {
     %orig;
     LBKeepSideStrip(self);
+    LBFitContent(self);
 }
 - (void)viewDidLayoutSubviews {
     %orig;
     LBKeepSideStrip(self);
+    LBFitContent(self);
 }
 %end
 %end
@@ -1082,4 +1151,5 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("T1ConversationContainerViewController")) %init(TweetBar);
     if (objc_getClass("T1HostViewController")) %init(Orientation);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
+    if (objc_getClass("_TtC14T1TwitterSwift24InlineActionsFloatingBar")) %init(ArticleBar);
 }
