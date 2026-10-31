@@ -15,6 +15,7 @@
 - (BOOL)isFullscreen;
 @end
 @interface T1ImmersiveDockMorphAnimator : NSObject @end
+@interface TTACoreAnatomyFeatures : NSObject @end
 
 // ---------- helpers ----------
 
@@ -203,6 +204,20 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
 %end
 %end
 
+// ---------- Show more ----------
+
+// "Show more" on a long post expands it in place only while two of X's server switches are on
+// (ios_inline_expand_read_more_enabled and its animation one, read through TTACoreAnatomyFeatures, from
+// T1StatusViewTruncationTokenAreaTapEventHandler): with the first off it opens the post instead, with the
+// second off it marks the post expanded and waits for a reload that runs only once the list sits still,
+// so it sometimes did nothing. Both stay on.
+%group InlineExpand
+%hook TTACoreAnatomyFeatures
+- (BOOL)isNoteTweetInlineExpandEnabled { return YES; }
+- (BOOL)isNoteTweetInlineExpandAnimationEnabled { return YES; }
+%end
+%end
+
 // ---------- Videos ----------
 
 // X's full-screen viewer fills the screen with a video, cropping it, where the timeline fits it: its player
@@ -259,6 +274,7 @@ static BOOL LBDockMorph;
     }];
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TAVPlayerViewConfiguration")) %init(VideoFit);
+    if (objc_getClass("TTACoreAnatomyFeatures")) %init(InlineExpand);
     if (objc_getClass("T1ImmersiveDockMorphAnimator")) %init(DockMorph);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
     if (objc_getClass("XNAVNavigationController") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(ImmersiveWrapper);

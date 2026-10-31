@@ -140,6 +140,7 @@ static const void *kLBDumpGesture = &kLBDumpGesture;
 
 // Marks X's "Show more" on a long post in the log, so what moved after it shows.
 @interface T1StatusViewTruncationTokenAreaTapEventHandler : NSObject @end
+@interface T1StandardStatusInlineExpansionHelper : NSObject @end
 
 %group ShowMore
 %hook T1StatusViewTruncationTokenAreaTapEventHandler
@@ -148,9 +149,21 @@ static const void *kLBDumpGesture = &kLBDumpGesture;
     %orig;
 }
 %end
+
+// Whether X expanded it in place (YES), or fell back to a reload (NO; no row, it isn't on screen).
+%hook T1StandardStatusInlineExpansionHelper
+- (BOOL)setExpanded:(BOOL)expanded forViewModel:(id)model atIndexPath:(NSIndexPath *)path inController:(id)controller
+   animationEnabled:(BOOL)animated {
+    BOOL done = %orig;
+    LBLog(@"Show more %@ row %@ animated %d: %@", expanded ? @"expand" : @"collapse", path ? @(path.row) : @"none", animated,
+          done ? @"in place" : @"left to a reload");
+    return done;
+}
+%end
 %end
 
 %ctor {
     %init;
-    if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler")) %init(ShowMore);
+    if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler") && objc_getClass("T1StandardStatusInlineExpansionHelper"))
+        %init(ShowMore);
 }

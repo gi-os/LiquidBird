@@ -198,7 +198,9 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = UIColor.clearColor;
+        // The strip is the sidebar's, black under its glass: the feed's photos and the column panels ran on under
+        // it and showed around the glass.
+        self.backgroundColor = UIColor.blackColor;
         _logoGlass = LBGlassView(nil);
         [self addSubview:_logoGlass];
         _logo = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -226,11 +228,9 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     return self;
 }
 
-// Only the glass takes touches; the strip around it stays the app's.
+// The whole strip takes its touches: what's under it can't be seen, so a tap there mustn't open it.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    for (UIView *g in @[_logoGlass, _rail])
-        if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
-    return NO;
+    return CGRectContainsPoint(self.bounds, point);
 }
 
 // The whole logo glass is the logo's: the bird inside is only 24pt of the 40pt circle.
@@ -874,21 +874,34 @@ static void LBTrimEdgeTreatment(UIView *treatment) {
 // A post's photos scroll sideways in a carousel (TweetMediaAttachments' MultiMediaCarouselView) that runs
 // on to the screen's edge, under the Duo's side strip folded: X's timeline doesn't know about the strip
 // (its lists sit in paging cells, which drop the safe area), so the last photo stopped under the sidebar.
-// The carousel scrolls on by as much of it as the strip covers.
+// The carousel scrolls on until its end clears the strip.
 static const void *kLBCarouselSize = &kLBCarouselSize;
 
-// How much of a carousel the strip covers (never more than the strip), or -1 where that can't be told: out
-// of the window (a tweet pushed over its timeline), or in a timeline page parked off to the side (For you /
-// Following, or sliding in), which isn't where it will show. Those keep what they had.
-static CGFloat LBUnderStrip(UIView *v) {
-    UIWindow *w = v.window;
+// How much further a carousel has to scroll for its end to clear the strip, or -1 where that can't be told.
+// X stops a carousel where its content's end meets its scroll view's right edge, and the scroll view is
+// wider than the post's column: X starts it at -bodyLeadingInset and runs it on by bodyTrailingInset, to
+// the screen's edge or beyond. So it's how far that edge runs past the strip's, uncapped, and where the
+// carousel sits is told by the column (the MultiMediaCarouselView), which stays on the screen, not by the
+// scroll view's left edge, which can sit off it (capped at the strip and told by that edge, the last photo
+// stayed under the strip again). In a timeline page parked off to the side (For you / Following, or sliding
+// in) it's measured where the page shows; still off to the side (sliding under a push), or out of the
+// window, it can't be told and keeps what it had.
+static CGFloat LBUnderStrip(UIView *scroll) {
+    UIWindow *w = scroll.window;
     if (!w) return -1;
     CGFloat strip = LBSideStrip(w);
     if (strip <= 0) return 0;
-    CGRect inWindow = [v convertRect:v.bounds toView:nil];
+    UIView *column = scroll.superview ?: scroll;
+    CGFloat shift = 0;   // how far its pages sit from where they show
+    Class page = objc_getClass("_TtC10TFNUISwiftP33_19E25DFCBFA569FDFA3E56F314F9A42410PagingCell");
+    for (UIView *s = column; s && page; s = s.superview)
+        if ([s isKindOfClass:page] && [s.superview isKindOfClass:UICollectionView.class])
+            shift += CGRectGetMinX(s.frame) - s.superview.bounds.origin.x;
     CGFloat width = w.bounds.size.width;
-    if (CGRectGetMinX(inWindow) < -0.5 || CGRectGetMinX(inWindow) > width - 0.5) return -1;
-    return MIN(strip, MAX(0, round(CGRectGetMaxX(inWindow) - (width - strip))));
+    CGFloat start = CGRectGetMinX([column convertRect:column.bounds toView:nil]) - shift;
+    if (start < -0.5 || start >= width - strip) return -1;
+    CGFloat end = CGRectGetMaxX([scroll convertRect:scroll.bounds toView:nil]) - shift;
+    return MAX(0, round(end - (width - strip)));
 }
 
 static void LBRefitCarousel(UIScrollView *scroll) {
@@ -900,18 +913,28 @@ static void LBRefitCarousel(UIScrollView *scroll) {
 %hook _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView
 - (void)setContentSize:(CGSize)size {
     NSValue *was = objc_getAssociatedObject(self, kLBCarouselSize);
+    CGFloat had = was ? MAX(0, self.contentSize.width - was.CGSizeValue.width) : 0;   // the extra it had
     objc_setAssociatedObject(self, kLBCarouselSize, [NSValue valueWithCGSize:size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    CGFloat under = LBUnderStrip(self);
-    if (under < 0) under = was ? MAX(0, self.contentSize.width - was.CGSizeValue.width) : 0;   // the extra it had
-    if (size.width > self.bounds.size.width) size.width += under;
+    CGFloat extra = 0;
+    if (size.width + self.contentInset.left > self.bounds.size.width) {   // scrolls at all, as X judges it (its leading inset counts)
+        extra = LBUnderStrip(self);
+        if (extra < 0) extra = had;
+        // In the layout copy, as it changes: where X put the scroll view, to check what it was given by.
+        if (fabs(extra - had) >= 0.5) {
+            CGRect r = [self convertRect:self.bounds toView:nil];
+            LBLog(@"photo carousel %.0f..%.0f in the window, content %.0f: scrolls %.0f past X's end (had %.0f)",
+                  CGRectGetMinX(r), CGRectGetMaxX(r), size.width, extra, had);
+        }
+    }
+    size.width += extra;
     if (!CGSizeEqualToSize(self.contentSize, size)) %orig(size);
 }
 - (void)didMoveToWindow {
     %orig;
     LBRefitCarousel(self);
 }
-// Measured again as a finger takes it, on screen: X lays a timeline page (For you / Following) out in its
-// paging cell while it's still off to the side, and nothing lays it out again once it's shown.
+// Measured again as a finger takes it, where it rests: X lays a timeline page (For you / Following) out in
+// its paging cell while it's still off to the side, and nothing lays it out again once it's shown.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
     if (g == self.panGestureRecognizer) LBRefitCarousel(self);
     return %orig;
