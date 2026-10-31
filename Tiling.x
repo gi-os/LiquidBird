@@ -198,7 +198,9 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        self.backgroundColor = UIColor.clearColor;
+        // The strip is the sidebar's, black under its glass: the feed's photos and the column panels ran on under
+        // it and showed around the glass.
+        self.backgroundColor = UIColor.blackColor;
         _logoGlass = LBGlassView(nil);
         [self addSubview:_logoGlass];
         _logo = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -226,11 +228,9 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     return self;
 }
 
-// Only the glass takes touches; the strip around it stays the app's.
+// The whole strip takes its touches: what's under it can't be seen, so a tap there mustn't open it.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    for (UIView *g in @[_logoGlass, _rail])
-        if (!g.hidden && CGRectContainsPoint(g.frame, point)) return YES;
-    return NO;
+    return CGRectContainsPoint(self.bounds, point);
 }
 
 // The whole logo glass is the logo's: the bird inside is only 24pt of the 40pt circle.
