@@ -598,9 +598,10 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     // first load (it never finished), so until it's been opened the panel's place says so instead.
     LBCShowHint(view, wide && LBCExploreEnabled() && !exploreView && !exploreSelected && !centre);
     // X lays its tabs out with constraints, which undo frames set from here, so the feed narrows through
-    // the safe area its screens already respect (as they do the sidebar's strip): the selected tab gets
-    // the panel's width on the panel's side. Explore keeps its full frame but takes the feed's width on
-    // the other side, shows only through its strip (a mask) and takes touches only there.
+    // the safe area its screens already respect (the sidebar's strip is outside them already, Tiling.x's
+    // LBFitContent): the selected tab gets the panel's width on the panel's side. Explore keeps its full
+    // frame but takes the feed's width on the other side, shows only through its strip (a mask) and takes
+    // touches only there.
     CGFloat panelWidth = LBCPanelWidth(w), feed = LBCAvailable(w) - panelWidth;
     BOOL right = wide && LBCFeedOnRight();
     CGRect panelRect = CGRectMake(right ? 0 : feed, 0, panelWidth, w.bounds.size.height);
