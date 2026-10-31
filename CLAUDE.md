@@ -34,3 +34,4 @@ Theos tweak injected into the NeoFreeBird IPA (Twitter-branded sideload IPA from
 ## Commands
 - `make package FINALPACKAGE=1`  builds `packages/*.deb`
 - `./scripts/build.sh`           end to end, output `out/LiquidBird.ipa`
+- `./scripts/syntax_check.sh`    compile check in seconds before pushing: each .x as plain ObjC (`scripts/delogos.py`) through clang -Werror against the iOS SDK
