@@ -129,14 +129,17 @@ static BOOL LBSwitchOff(NSString *key) {
 // Photos and videos (T1ImmersiveFullscreenHandler) open X's full-screen viewer, T1ImmersiveFullScreenViewController
 // (holding a MultiImmersiveViewControllerManager and its T1ImmersiveViewControllers), which hides the
 // status bar only in landscape. The status bar goes while one is open, folded too. It changes only once
-// the viewer has finished opening, and comes back once it has finished closing: hiding it takes the Duo's
-// side strip away, and doing that mid-animation moved the screens under X's own transitions.
+// the viewer has appeared (its transition coordinator is still wrapping up then, which Columns.x's LBCFitScreen
+// allows for), and comes back once it has finished closing: hiding it takes the Duo's side strip away, and doing
+// that mid-animation moved the screens under X's own transitions.
 static NSHashTable<UIViewController *> *LBImmersives(void) {
     static NSHashTable *table;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
     return table;
 }
+
+void LBLogHomeTimeline(NSString *when);   // Tiling.x: where the Home timeline is scrolled to, in the layout copy
 
 static BOOL LBImmersiveShowing(void) {
     for (UIViewController *vc in LBImmersives())
@@ -179,12 +182,21 @@ static BOOL LBWrapsImmersive(UINavigationController *nav) {
 // under the strip instead of jumping. What X left to lay out goes first, so only the strip going animates.
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    LBLogHomeTimeline(@"photo opened");
     [LBImmersives() addObject:self];
     UIWindow *w = self.view.window;
     [w layoutIfNeeded];
     [UIView animateWithDuration:0.2 animations:^{ LBStatusBarChanged(); [w layoutIfNeeded]; }];
+    LBLogHomeTimeline(@"status bar hidden");
 }
-- (void)viewDidDisappear:(BOOL)animated { %orig; [LBImmersives() removeObject:self]; LBStatusBarChanged(); }
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    [LBImmersives() removeObject:self];
+    LBLogHomeTimeline(@"photo closed");
+    LBStatusBarChanged();
+    LBLogHomeTimeline(@"status bar shown");
+    dispatch_async(dispatch_get_main_queue(), ^{ LBLogHomeTimeline(@"after the photo"); });
+}
 %end
 
 %hook _TtC14T1TwitterSwift35MultiImmersiveViewControllerManager
