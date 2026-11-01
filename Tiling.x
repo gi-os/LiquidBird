@@ -31,7 +31,10 @@
 @interface _TtC11XNavigation10TabBarPill : UIView
 @end
 @interface _TtC11XNavigation25TabBarChromeContainerView : UIView @end
-@interface _TtC21TweetMediaAttachments22MultiMediaCarouselView : UIView @end
+@interface _TtC21TweetMediaAttachments22MultiMediaCarouselView : UIView
++ (BOOL)carouselRequiresScrollingFor:(CGFloat)width height:(CGFloat)height maxItemWidthRatio:(CGFloat)ratio
+                       trailingBleed:(CGFloat)bleed mediaInfos:(NSArray *)infos;
+@end
 @interface _TtC14T1TwitterSwift24InlineActionsFloatingBar : UIView @end
 @interface _TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView : UIScrollView @end
 @interface _TtC11XNavigation25TabBarAccessoryButtonView : UIView
@@ -47,6 +50,25 @@
 @interface T1ConversationContainerViewController : UIViewController
 @end
 @interface _TtC13XDesignSystem19ScrollEdgeTreatment : UIView
+@end
+@interface TFNLayoutMetrics : NSObject
+- (UITraitCollection *)traitCollection;
+- (CGFloat)canvasWidth;
+- (UIEdgeInsets)displayAreaEdgeInsets;
+- (UIEdgeInsets)horizontalSafeAreaInsets;
+- (UIEdgeInsets)bodyEdgeInsets;
+@end
+@interface T1StatusViewAttachmentLayoutSpec : NSObject
+@end
+@interface T1StandardStatusAttachmentViewLayoutState : NSObject
+- (CGSize)size;
+- (void)setSize:(CGSize)size;
+- (void)setCarouselRequiresScrolling:(BOOL)scrolls;
+@end
+@interface T1StandardStatusAttachmentViewAdapter : NSObject
+- (CGFloat)_t1_carouselTrailingBleedForViewModel:(id)viewModel layoutMetrics:(TFNLayoutMetrics *)metrics;
+@end
+@interface T1StatusCell : UITableViewCell
 @end
 @interface T1ImmersiveFullScreenViewController : UIViewController
 @end
@@ -919,10 +941,20 @@ static void LBTrimEdgeTreatment(UIView *treatment) {
 
 // MARK: - Photo carousels
 
-// A post's photos scroll sideways in a carousel (TweetMediaAttachments' MultiMediaCarouselView) that runs
-// on to the screen's edge, under the Duo's side strip folded: X's timeline doesn't know about the strip
-// (its lists sit in paging cells, which drop the safe area), so the last photo stopped under the sidebar.
-// The carousel scrolls on until its end clears the strip.
+// A post's photos scroll sideways in a carousel (TweetMediaAttachments' MultiMediaCarouselView) whose scroll view
+// runs on past the post's column by X's bleed (T1StatusViewAttachmentLayoutSpec), to the screen's edge on an iPhone.
+// Folded, that's under the Duo's side strip: X's timeline doesn't know about the strip (its lists sit in paging
+// cells, which drop the safe area), so the last photo stopped under the sidebar. The carousel scrolls on until its
+// end clears the strip.
+//
+// Unfolded with the feed full width, X centres the post's column in the wide canvas (a line-length margin beside
+// its display area) and measures the bleed inside that, so a carousel stopped 40pt past the column with black
+// beyond it, and X fitted a post's photos to the column's width, which left nothing to scroll. There a carousel is
+// laid out as if the column ran on to the canvas's trailing edge (where the sidebar begins): its photos are sized
+// for the column plus that margin, but none wider than X lets one photo be in the column (it crops a photo past
+// that), its scroll view runs on to the edge, and it scrolls wherever they still run past it. The post keeps the
+// column's width, so nothing else in it moves. A column opened over the feed covers it; beside the Explore panel,
+// in a column and folded X doesn't centre, so X's own layout stays.
 static const void *kLBCarouselSize = &kLBCarouselSize;
 
 // How much further a carousel has to scroll for its end to clear the strip, or -1 where that can't be told.
@@ -995,6 +1027,129 @@ static void LBRefitCarousel(UIScrollView *scroll) {
     Class scroll = objc_getClass("_TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView");
     for (UIView *v in self.subviews)
         if ([v isKindOfClass:scroll]) LBRefitCarousel((UIScrollView *)v);
+}
+%end
+%end
+
+// How far X's canvas runs on past the display area a post's column sits in, where X centres the column: the
+// display area's trailing margin, less what the window's safe area already takes (X counts that only for a canvas
+// as wide as the window, before LBFitContent narrows it), or 0. X centres only with room to spare, so it's 0
+// folded, in a column and beside the Explore panel. X's centring leaves the same margin on both sides, to the pixel
+// (TFNLayoutMetrics' line-length insets), so a display area that isn't centred (one X sets for a part of a post) is
+// never read as room. Never for a quoted post's carousel, which stays inside the quote's border (0x100 in its
+// options: X's own test, carouselItemCornerRadiusForOptions:), nor right to left. X builds a post's layout state
+// off the main thread too, so this reads the layout metrics and nothing else.
+static CGFloat LBCarouselReach(TFNLayoutMetrics *metrics, NSUInteger options) {
+    if (!metrics || (options & 0x100)) return 0;
+    if (![metrics respondsToSelector:@selector(displayAreaEdgeInsets)] ||
+        ![metrics respondsToSelector:@selector(horizontalSafeAreaInsets)] ||
+        ![metrics respondsToSelector:@selector(bodyEdgeInsets)]) return 0;
+    if ([metrics respondsToSelector:@selector(traitCollection)] &&
+        metrics.traitCollection.layoutDirection == UITraitEnvironmentLayoutDirectionRightToLeft) return 0;
+    UIEdgeInsets display = metrics.displayAreaEdgeInsets;
+    if (fabs(display.left - display.right) > 1) return 0;
+    CGFloat reach = display.right - metrics.horizontalSafeAreaInsets.right;
+    return reach >= 1 ? reach : 0;
+}
+
+// The tallest a carousel's photos can be with none cropped. The carousel view keeps the column's width and caps each
+// photo at that width x X's maxItemWidthRatio (rounded up to the pixel), filling it (aspect fill) however wide the
+// photo was sized for, so a photo past the cap lost its sides. X sizes a photo from its media info's imageDimensions
+// (width over height), as here; one that doesn't say is a square of the carousel's height, which the cap leaves be.
+// Whole points a hair under the limit, so no photo rounds up past it; CGFLOAT_MAX where no photo says its size, 0
+// where a media info can't be read.
+static CGFloat LBCarouselUncroppedHeight(NSArray *infos, CGFloat maxItemWidth) {
+    CGFloat height = CGFLOAT_MAX;
+    SEL dimensions = @selector(imageDimensions);
+    for (id info in infos) {
+        if (![info respondsToSelector:dimensions]) return 0;
+        CGSize size = ((CGSize (*)(id, SEL))objc_msgSend)(info, dimensions);
+        if (size.width > 0 && size.height > 0) height = MIN(height, maxItemWidth * size.height / size.width);
+    }
+    return height == CGFLOAT_MAX ? height : MAX(0, floor(height - 0.01));
+}
+
+// The cell's content view is the column's display area, which ends short of the canvas where X centres the column,
+// so a carousel running on past it took no touches there: a tap went to the cell (opening the post) and a sideways
+// drag to the timeline's pages (For you / Following). A touch out there that nothing in the post takes goes to a
+// carousel under the finger instead.
+static UIView *LBCarouselHit(UITableViewCell *cell, CGPoint point, UIEvent *event) {
+    UIView *content = cell.contentView;
+    Class carousel = objc_getClass("_TtC21TweetMediaAttachments22MultiMediaCarouselView");
+    if (!content || !carousel || CGRectContainsPoint([content convertRect:content.bounds toView:cell], point)) return nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:content];
+    while (queue.count) {
+        UIView *v = queue.lastObject;
+        [queue removeLastObject];
+        if (v.hidden || v.alpha < 0.01 || !v.userInteractionEnabled) continue;
+        if (![v isKindOfClass:carousel]) { [queue addObjectsFromArray:v.subviews]; continue; }
+        UIView *hit = [v hitTest:[v convertPoint:point fromView:cell] withEvent:event];
+        if (hit) return hit;
+    }
+    return nil;
+}
+
+%group CarouselReach
+%hook T1StatusViewAttachmentLayoutSpec
+// The scroll view's frame, X's "doesn't need scrolling" lock (both from the carousel's bodyTrailingInset) and its
+// scrolling test all take the bleed from here: on to the canvas's edge, from the column's.
++ (UIEdgeInsets)carouselBodyBleedInsetsForOptions:(NSUInteger)options displayType:(NSUInteger)type layoutMetrics:(TFNLayoutMetrics *)metrics {
+    UIEdgeInsets bleed = %orig;
+    CGFloat reach = LBCarouselReach(metrics, options);
+    if (reach <= 0) return bleed;
+    CGFloat edge = metrics.bodyEdgeInsets.right + reach;   // the column's end to the canvas's
+    if (bleed.right >= edge - 0.5) return bleed;
+    // In the layout copy, as it changes (the attachment's own layout asks from the main thread).
+    if (NSThread.isMainThread) {
+        static CGFloat logged;
+        if (fabs(edge - logged) >= 0.5) {
+            logged = edge;
+            LBLog(@"photo carousels run on to the canvas's edge: bleed %.0f -> %.0f, photos sized %.0f wider (canvas %.0f)",
+                  bleed.right, edge, reach, [metrics respondsToSelector:@selector(canvasWidth)] ? metrics.canvasWidth : 0);
+        }
+    }
+    bleed.right = edge;
+    return bleed;
+}
+%end
+
+%hook T1StandardStatusAttachmentViewAdapter
+// A post's carousel height (and so its cell's): X fits a post's photos to the width it's given, so they're fitted to
+// the column plus the margin they now run on into, no taller than leaves every photo uncropped (above) and never
+// shorter than X's own; where that's no taller than X's own, the state stays just as X made it. The attachment keeps
+// the column's width, and whether it scrolls (its page indicator) is judged as the carousel will be: that width, the
+// height, X's photo cap and the bleed above.
+- (void)_t1_applyCarouselLayoutToState:(T1StandardStatusAttachmentViewLayoutState *)state mediaInfos:(NSArray *)infos viewModel:(id)viewModel layoutMetrics:(TFNLayoutMetrics *)metrics width:(CGFloat)width anatomyFeatures:(id)features {
+    SEL options = @selector(options), ratio = @selector(multiMediaCarouselMaxItemWidthRatio);
+    Class carousel = objc_getClass("_TtC21TweetMediaAttachments22MultiMediaCarouselView");
+    SEL scrolls = @selector(carouselRequiresScrollingFor:height:maxItemWidthRatio:trailingBleed:mediaInfos:);
+    CGFloat reach = [viewModel respondsToSelector:options]
+        ? LBCarouselReach(metrics, ((NSUInteger (*)(id, SEL))objc_msgSend)(viewModel, options)) : 0;
+    if (reach <= 0 || width <= 0 || ![state respondsToSelector:@selector(size)] || ![state respondsToSelector:@selector(setSize:)] ||
+        ![state respondsToSelector:@selector(setCarouselRequiresScrolling:)] || ![features respondsToSelector:ratio] ||
+        ![carousel respondsToSelector:scrolls]) {
+        %orig;
+        return;
+    }
+    %orig(state, infos, viewModel, metrics, width + reach, features);
+    CGFloat wide = state.size.height;
+    %orig;   // X's own, last
+    CGFloat own = state.size.height;
+    CGFloat maxItem = ((CGFloat (*)(id, SEL))objc_msgSend)(features, ratio);
+    CGFloat height = maxItem > 0 ? MIN(wide, LBCarouselUncroppedHeight(infos, width * maxItem)) : 0;
+    if (height <= own + 0.5) return;
+    state.size = CGSizeMake(width, height);
+    CGFloat bleed = [self _t1_carouselTrailingBleedForViewModel:viewModel layoutMetrics:metrics];
+    [state setCarouselRequiresScrolling:[carousel carouselRequiresScrollingFor:width height:height maxItemWidthRatio:maxItem
+                                                                 trailingBleed:bleed mediaInfos:infos]];
+}
+%end
+
+%hook T1StatusCell
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = %orig;
+    if (!hit || [hit isDescendantOfView:self.contentView]) return hit;
+    return LBCarouselHit(self, point, event) ?: hit;
 }
 %end
 %end
@@ -1230,6 +1385,11 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtC11XNavigation25TabBarChromeContainerView")) %init(TabBarChrome);
     if (objc_getClass("_TtC21TweetMediaAttachments22MultiMediaCarouselView") &&
         objc_getClass("_TtC21TweetMediaAttachmentsP33_6CAF7C887196233EB6136C8EB3D77FBD18CarouselScrollView")) %init(Carousel);
+    Class spec = objc_getClass("T1StatusViewAttachmentLayoutSpec"), adapter = objc_getClass("T1StandardStatusAttachmentViewAdapter");
+    if (spec && adapter && objc_getClass("T1StatusCell") &&
+        class_getClassMethod(spec, @selector(carouselBodyBleedInsetsForOptions:displayType:layoutMetrics:)) &&
+        class_getInstanceMethod(adapter, @selector(_t1_applyCarouselLayoutToState:mediaInfos:viewModel:layoutMetrics:width:anatomyFeatures:)) &&
+        class_getInstanceMethod(adapter, @selector(_t1_carouselTrailingBleedForViewModel:layoutMetrics:))) %init(CarouselReach);
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
@@ -1241,6 +1401,4 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     // Looked up without messaging the classes, so nothing of X's is initialised while LiquidBird loads.
     if (class_getInstanceMethod(objc_getClass("T1ImmersiveFullScreenViewController"), sel_registerName("prepareMediaOriginForDismissal")) &&
         class_getInstanceMethod(UIScrollView.class, sel_registerName("tfn_programmaticallySetContentOffset:animated:"))) %init(PhotoReturn);
-    if ([objc_getClass("T1ImmersiveFullScreenViewController") instancesRespondToSelector:NSSelectorFromString(@"prepareMediaOriginForDismissal")] &&
-        [UIScrollView instancesRespondToSelector:NSSelectorFromString(@"tfn_programmaticallySetContentOffset:animated:")]) %init(PhotoReturn);
 }

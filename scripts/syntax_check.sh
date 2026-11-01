@@ -8,6 +8,9 @@ OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 status=0
 for f in *.x; do
+  # A group set up twice hooks its methods twice (each hook then runs on top of itself).
+  dup="$(grep -oE '%init\([A-Za-z0-9_]+\)' "$f" | sort | uniq -d)"
+  if [ -n "$dup" ]; then echo "$f: initialised more than once: $dup"; status=1; fi
   python3 -I scripts/delogos.py "$f" "$OUT/${f%.x}.m"
   # Two warnings only the stand-in trips: hooks become categories, and %orig isn't a [super ...] call.
   if ! xcrun --sdk iphoneos clang -fsyntax-only -fobjc-arc -Wall -Werror -Wno-objc-protocol-method-implementation \
