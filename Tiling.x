@@ -48,6 +48,8 @@
 @end
 @interface _TtC13XDesignSystem19ScrollEdgeTreatment : UIView
 @end
+@interface T1ImmersiveFullScreenViewController : UIViewController
+@end
 
 static const CGFloat LBSidebarWindow = 600;        // wider than any iPhone held upright: the Duo's poses
 static const CGFloat LBGlassWidth = 52;
@@ -794,9 +796,14 @@ static void LBShiftHome(UIViewController *home) {
     CGRect frame = hide ? CGRectMake(view.frame.origin.x, -shift, bounds.size.width, bounds.size.height + shift)
                         : CGRectMake(view.frame.origin.x, 0, bounds.size.width, bounds.size.height);
     frame = LBCFitScreen(home, frame);   // unfolded, narrowed to the feed's side
-    if (!CGRectEqualToRect(view.frame, frame)) {
+    // X's navigation puts Home back at its own frame whenever the status bar hides or shows (a photo opening and
+    // closing), not only as it slides. Moved here, its safe area still describes where it was until it lays out again
+    // (asked for now), so it isn't measured below until then.
+    BOOL moved = !CGRectEqualToRect(view.frame, frame);
+    if (moved) {
         LBLog(@"Home frame %@ -> %@", NSStringFromCGRect(view.frame), NSStringFromCGRect(frame));
         view.frame = frame;
+        [view setNeedsLayout];
     }
 
     // The timeline's top inset comes from Home's safe area, which moving the view up shortens (126 to
@@ -806,11 +813,12 @@ static void LBShiftHome(UIViewController *home) {
     for (UIViewController *c in home.childViewControllers)
         if ([NSStringFromClass(c.class) rangeOfString:@"SegmentedViewController"].location != NSNotFound) pager = c;
     if (!pager) return;
-    // Measured only once Home has settled on top, shifted, with no navigation transition running (sliding
-    // back in from a tweet, its safe area reads as if unshifted for a moment), and kept: any change to it
-    // moves the timeline's scroll position.
+    // Measured only once Home has settled on top, shifted and laid out there (not just moved back, above), with no
+    // navigation transition running (sliding back in from a tweet, its safe area reads as if unshifted for a moment),
+    // and kept: any change to it moves the timeline's scroll position.
     CGFloat measured = [objc_getAssociatedObject(home, kLBHomeExtra) doubleValue];
-    BOOL settled = upright && nav.topViewController == home && !nav.transitionCoordinator && fabs(view.frame.origin.y + shift) < 0.5;
+    BOOL settled = !moved && upright && nav.topViewController == home && !nav.transitionCoordinator &&
+                   fabs(view.frame.origin.y + shift) < 0.5;
     if (hide && settled && rowBottom > 0) {
         CGFloat was = measured;
         measured = MAX(0, round(rowBottom - view.safeAreaInsets.top));
@@ -1018,6 +1026,84 @@ static CGRect LBFitArticleBar(UIView *bar, CGRect frame) {
 %end
 %end
 
+// MARK: - Closing a photo
+
+// The Home timeline showing (For you or Following: the table in the paging cell that isn't hidden), or nil.
+static UIScrollView *LBHomeTimeline(UIWindow *w) {
+    Class homeClass = objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
+    UIView *home = LBFindVC(w.rootViewController, homeClass, 0).viewIfLoaded;
+    if (!home) return nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:home];
+    for (NSUInteger seen = 0; queue.count && seen < 500; seen++) {
+        UIView *v = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if (v.hidden) continue;
+        if ([v isKindOfClass:UITableView.class]) {
+            if ([v.accessibilityIdentifier hasPrefix:@"THFHomeTimelineItems"]) return (UIScrollView *)v;
+            continue;
+        }
+        [queue addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+// In the layout copy, at each step of a photo opening and closing (here and Tweak.x): where the Home timeline is
+// scrolled to, so the step that moved it shows.
+void LBLogHomeTimeline(NSString *when) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIScrollView *timeline = w.hidden ? nil : LBHomeTimeline(w);
+            if (!timeline) continue;
+            UIEdgeInsets inset = timeline.adjustedContentInset;
+            LBLog(@"%@: Home timeline at %.0f (insets %.0f, %.0f)", when, timeline.contentOffset.y, inset.top, inset.bottom);
+            return;
+        }
+    }
+}
+
+// As X's full-screen viewer starts closing (T1ImmersiveAnimator -prepareToReappear -> -prepareSourceForDismissal ->
+// -prepareMediaOriginForDismissal), the photo's place in the timeline (T1TimelineMediaOriginCoordinatorFactory's
+// prepare block) scrolls each list it sits in, with tfn_programmaticallySetContentOffset:animated:, until the photo is
+// inside the list's safe area with 8pt to spare. Where the sidebar shows, X's tab bar is faded out but its band still
+// counts as covering the bottom (the navigation's 108pt additional safe area, 142pt with the home indicator), so a photo
+// in full view near the bottom sent the timeline up as it closed. A scroll toward later posts is shortened by that band
+// (the list stays put if that's all it was); X's other corrections (a photo under the row of timelines, or really off
+// the screen) go ahead, and sideways ones (a carousel turning to the photo you ended on) are left alone.
+static BOOL LBClosingPhoto;
+
+%group PhotoReturn
+%hook T1ImmersiveFullScreenViewController
+- (void)prepareMediaOriginForDismissal {
+    LBLogHomeTimeline(@"photo closing");
+    BOOL was = LBClosingPhoto;
+    LBClosingPhoto = YES;
+    %orig;
+    LBClosingPhoto = was;
+}
+%end
+
+%hook UIScrollView
+- (void)tfn_programmaticallySetContentOffset:(CGPoint)offset animated:(BOOL)animated {
+    CGPoint now = self.contentOffset;
+    if (!LBClosingPhoto || fabs(offset.x - now.x) >= 0.5) { %orig; return; }
+    UIWindow *w = self.window;
+    CGFloat y = offset.y;
+    if (y > now.y && LBSidebarWanted(w)) {
+        // The faded tab bar's band: the list's safe area past the window's own (the home indicator). A real bar
+        // (an opened tweet's reply bar, in its scroll indicator insets) still counts.
+        CGFloat band = MAX(0, self.safeAreaInsets.bottom - w.safeAreaInsets.bottom);
+        y = MAX(now.y, y - band);
+    }
+    BOOL kept = fabs(y - offset.y) >= 0.5;
+    LBLog(@"closing photo: X scrolls %@ %.0f -> %.0f%@", NSStringFromClass(self.class), now.y, offset.y,
+          kept ? [NSString stringWithFormat:@", kept to %.0f (its tab bar's band is empty)", y] : @"");
+    if (fabs(y - now.y) < 0.001) return;
+    %orig(CGPointMake(offset.x, y), animated);
+}
+%end
+%end
+
 // MARK: - Scroll edge effects
 
 // iOS 26 blurs a scroll view's edge where a bar sits over it. With the tab bar replaced by the sidebar,
@@ -1152,4 +1238,9 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("T1HostViewController")) %init(Orientation);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
     if (objc_getClass("_TtC14T1TwitterSwift24InlineActionsFloatingBar")) %init(ArticleBar);
+    // Looked up without messaging the classes, so nothing of X's is initialised while LiquidBird loads.
+    if (class_getInstanceMethod(objc_getClass("T1ImmersiveFullScreenViewController"), sel_registerName("prepareMediaOriginForDismissal")) &&
+        class_getInstanceMethod(UIScrollView.class, sel_registerName("tfn_programmaticallySetContentOffset:animated:"))) %init(PhotoReturn);
+    if ([objc_getClass("T1ImmersiveFullScreenViewController") instancesRespondToSelector:NSSelectorFromString(@"prepareMediaOriginForDismissal")] &&
+        [UIScrollView instancesRespondToSelector:NSSelectorFromString(@"tfn_programmaticallySetContentOffset:animated:")]) %init(PhotoReturn);
 }

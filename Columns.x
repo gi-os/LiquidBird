@@ -648,11 +648,15 @@ static void LBCLayoutPanel(UIViewController *tabs) {
 // The bars keep to that safe area, but X's lists don't: the timelines and Explore's pages sit in paging
 // cells, which cut a safe area's sides off, and stayed full width under it. So a tab's screen is placed in
 // its side outright; the navigation sets its screens' frames, not constraints, so that stays. Left alone
-// mid-transition (the slide back folded), and for screens not on a tab's stack.
+// mid-push or pop (the slide back folded), and for screens not on a tab's stack. Not while something is presented
+// over the tab (its coordinator has a presentation style): the status bar going as a photo opens puts Home back at
+// its own frame while the viewer's opening is still finishing, and left full width under the photo, Home narrowed
+// again only as it closed, rewrapping the timeline twice.
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
     UINavigationController *nav = vc.navigationController;
     UIView *container = vc.viewIfLoaded.superview;
-    if (!container || nav.topViewController != vc || nav.transitionCoordinator) return frame;
+    id<UIViewControllerTransitionCoordinator> tc = nav.transitionCoordinator;
+    if (!container || nav.topViewController != vc || (tc && tc.presentationStyle == UIModalPresentationNone)) return frame;
     if (![nav.parentViewController isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")]) return frame;
     UIEdgeInsets extra = nav.additionalSafeAreaInsets, safe = nav.view.safeAreaInsets;
     CGFloat width = container.bounds.size.width;
