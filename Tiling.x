@@ -106,8 +106,10 @@ CGFloat LBSideStrip(UIWindow *w) {
         return safe.right;
     }
     NSNumber *strip = seen[size];
-    // Turned sideways it's the same pose: folded, a photo turned with the phone makes the window 678x466.
-    if (!strip && seen) strip = seen[[NSValue valueWithCGSize:CGSizeMake(s.height, s.width)]];
+    // Turned sideways it's the same pose folded: a photo turned with the phone makes the window 678x466. Not
+    // unfolded, where turning it upright (669x951) puts the status bar along the top and there's no side strip.
+    if (!strip && seen && MIN(s.width, s.height) < LBSidebarWindow)
+        strip = seen[[NSValue valueWithCGSize:CGSizeMake(s.height, s.width)]];
     return strip.doubleValue;
 }
 
@@ -743,6 +745,60 @@ static void LBSyncGlassTabBar(UIView *tabBar) {
 %end
 %end
 
+// MARK: - Bars that don't collapse
+
+// X's navigation (XNAVNavigationController) collapses a screen's bar as its list scrolls, a step for every frame
+// drawn, laying the screen out again at each step. Where LiquidBird hides the bar (Home, an opened tweet) those
+// steps put Home back at the navigation's own frame many times a second (LBShiftHome moving it back each time
+// made the timeline flip height and jump, and taps land off target) and changed an opened tweet's safe area
+// (its last reply flickered). X asks a screen that adopts XNAVConfigurationProviding for its
+// xnav_navigationConfiguration, and these two don't, so they get collapsing by default: they adopt it here and
+// answer with XNAVConfiguration's pinned bar (it never collapses) where the sidebar shows, X's standard one
+// elsewhere.
+static id LBNavigationConfiguration(UIViewController *self, SEL _cmd) {
+    Class configuration = objc_getClass("XNAVConfiguration");
+    UIWindow *w = self.viewIfLoaded.window ?: self.navigationController.viewIfLoaded.window;
+    SEL which = !w || LBSidebarWanted(w) ? sel_registerName("pinnedConfiguration") : sel_registerName("standardConfiguration");
+    return ((id (*)(id, SEL))objc_msgSend)(configuration, which);
+}
+
+// What the bar follows (scrolling to the top when the tab is tapped again): adopting the protocol makes X ask
+// the screen itself, so it passes on the list showing, which X's own data screens provide
+// (TFNDataViewController -xnav_contentScrollView). Nil, which X takes as none, if no list shows.
+static UIScrollView *LBContentScrollView(UIViewController *self, SEL _cmd) {
+    SEL ask = sel_registerName("xnav_contentScrollView");
+    NSMutableArray<UIViewController *> *queue = [self.childViewControllers mutableCopy];
+    for (NSUInteger seen = 0; queue.count && seen < 64; seen++) {
+        UIViewController *c = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        BOOL shown = c.viewIfLoaded.window != nil;
+        for (UIView *v = c.viewIfLoaded; shown && v; v = v.superview) if (v.hidden) shown = NO;
+        if (!shown) continue;   // the other timeline page (For you / Following) is parked hidden
+        if ([c respondsToSelector:ask]) {
+            UIScrollView *list = ((id (*)(id, SEL))objc_msgSend)(c, ask);
+            if (list) return list;
+        }
+        [queue addObjectsFromArray:c.childViewControllers];
+    }
+    return nil;
+}
+
+static void LBPinBars(void) {
+    Protocol *providing = objc_getProtocol("XNAVConfigurationProviding");
+    Class configuration = objc_getClass("XNAVConfiguration");
+    SEL answer = sel_registerName("xnav_navigationConfiguration");
+    if (!providing || !configuration || !class_getClassMethod(configuration, sel_registerName("pinnedConfiguration")) ||
+        !class_getClassMethod(configuration, sel_registerName("standardConfiguration"))) return;
+    for (NSString *name in @[@"_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController",
+                             @"T1ConversationContainerViewController"]) {
+        Class screen = objc_getClass(name.UTF8String);
+        if (!screen || class_getInstanceMethod(screen, answer)) continue;   // X answers for it already: left alone
+        class_addMethod(screen, answer, (IMP)LBNavigationConfiguration, "@@:");
+        class_addMethod(screen, sel_registerName("xnav_contentScrollView"), (IMP)LBContentScrollView, "@@:");
+        class_addProtocol(screen, providing);
+    }
+}
+
 // MARK: - Home's and an opened tweet's top bar
 
 // The Home top bar (avatar and bird) goes where the sidebar stands in for it: the sidebar's logo opens
@@ -795,8 +851,11 @@ static void LBShiftHome(UIViewController *home) {
     CGFloat rowHeight = 44;
     for (UIView *v in view.subviews) if (row && [v isKindOfClass:row]) rowHeight = v.frame.size.height;
     CGRect barFrame = bar.frame;
-    if (upright && barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
-        CGFloat measured = round(CGRectGetMaxY(barFrame) - 6);
+    // Up to the window's top safe area: unfolded and held upright the status bar runs along the top (82pt), and
+    // the row stays below it. Measured with the status bar showing, which hiding it (a photo) would change.
+    BOOL statusBar = !w.windowScene.statusBarManager.isStatusBarHidden;
+    if (upright && statusBar && barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
+        CGFloat measured = MAX(0, round(CGRectGetMaxY(barFrame) - w.safeAreaInsets.top - 6));
         if (fabs(measured - shift) >= 0.5) {
             LBLog(@"Home shift %.0f -> %.0f (bar %@)", shift, measured, NSStringFromCGRect(barFrame));
             shift = measured;
@@ -1378,6 +1437,7 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
 %end
 
 %ctor {
+    LBPinBars();
     // TFNFloatingActionButton rides in the GlassTabBar group: it's there either way.
     if (objc_getClass("_TtC11XNavigation10TabBarView") && objc_getClass("_TtC11XNavigation10TabBarPill") &&
         objc_getClass("TFNFloatingActionButton")) %init(GlassTabBar);
