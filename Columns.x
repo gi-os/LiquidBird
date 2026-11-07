@@ -339,14 +339,15 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 }
 
 // Snaps to column edges, in the direction flicked (Twitter for iPad's bestOffsetForPossibleOffsets:); pulled
-// on past the last column toward the left (or past the first toward the right, when the columns are on the
-// right), the columns are thrown away.
+// on past the last column toward the left, or past the first toward the right (on either side), or flicked
+// either way there, the columns are thrown away.
 - (void)scrollViewWillEndDragging:(UIScrollView *)scrollView withVelocity:(CGPoint)velocity
               targetContentOffset:(inout CGPoint *)target {
-    static const CGFloat throwDistance = 120;
+    static const CGFloat throwDistance = 70;
     CGFloat beyondEnd = scrollView.contentOffset.x - self.endOffset, beforeStart = -scrollView.contentOffset.x;
-    BOOL left = beyondEnd > throwDistance || (beyondEnd > 20 && velocity.x > 1);
-    BOOL right = !self.fromLeading && (beforeStart > throwDistance || (beforeStart > 20 && velocity.x < -1));
+    BOOL left = beyondEnd > throwDistance || (beyondEnd > 12 && velocity.x > 0.4);
+    // Either side: dragged to the right past the first column, or flicked that way, they go.
+    BOOL right = beforeStart > throwDistance || (beforeStart > 12 && velocity.x < -0.4);
     if (left || right) {
         *target = scrollView.contentOffset;
         dispatch_async(dispatch_get_main_queue(), ^{ [self throwAwayToLeft:left]; });
