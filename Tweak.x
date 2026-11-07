@@ -277,11 +277,13 @@ static BOOL LBDockMorph;
 // The Duo half open on its side, like a laptop, puts a full-screen video in the top half, above the fold, with the
 // viewer's controls on the half below. Half open, the fold is an active "division" reserved region, a band across
 // the window (-[UIView reservedRegionsOfKind:options:]); a hinge interaction says when it moves, and since the
-// regions fill in a moment after it does, they're read again a few times. The viewer's player (TAVPlayerView,
-// whose outputView is the video's own rectangle) is moved and, if need be, shrunk to fit that half; opened flat,
-// it goes back.
+// regions fill in a moment after it does, they're read again a few times. They're read only outside layout (asking
+// for them inside a layout pass froze the app) and kept; the viewer's player (TAVPlayerView, whose outputView is
+// the video's own rectangle) is then moved and, if need be, shrunk to fit that half. Opened flat, it goes back.
 static const void *kLBHinge = &kLBHinge;
 static const void *kLBLaptopMoved = &kLBLaptopMoved;
+static CGFloat LBFoldY;   // the fold's top edge in the window, half open on its side; 0 otherwise
+static CGSize LBFoldWindow;   // the window size it was read at
 
 static NSHashTable<UIView *> *LBViewerPlayers(void) {
     static NSHashTable *table;
@@ -290,15 +292,30 @@ static NSHashTable<UIView *> *LBViewerPlayers(void) {
     return table;
 }
 
-// The fold's top edge in the window when it's half open with the fold across it (laptop), else 0.
-static CGFloat LBLaptopFold(UIWindow *w) {
+static NSArray *LBFoldRegions(UIWindow *w) {
     Class kinds = objc_getClass("UIViewReservedRegionKind");
     if (!w || !kinds || ![kinds respondsToSelector:@selector(divisionRegionKind)] ||
-        ![w respondsToSelector:@selector(reservedRegionsOfKind:options:)]) return 0;
+        ![w respondsToSelector:@selector(reservedRegionsOfKind:options:)]) return nil;
     id regions = [w reservedRegionsOfKind:[kinds divisionRegionKind] options:1];   // 1: include inactive ones
-    if (![regions isKindOfClass:NSArray.class]) return 0;
-    CGSize size = w.bounds.size;
+    return [regions isKindOfClass:NSArray.class] ? regions : nil;
+}
+
+// For the layout copy: the fold regions as iOS reports them.
+NSString *LBFoldDescription(UIWindow *w) {
+    NSArray *regions = LBFoldRegions(w);
+    if (!regions) return objc_getClass("UIViewReservedRegionKind") ? @"no regions" : @"no fold API";
+    NSMutableArray *parts = [NSMutableArray array];
     for (id region in regions) {
+        BOOL active = [region respondsToSelector:@selector(isActive)] && [region isActive];
+        CGRect band = [region respondsToSelector:@selector(frame)] ? [(UIView *)region frame] : CGRectZero;
+        [parts addObject:[NSString stringWithFormat:@"%@%@", NSStringFromCGRect(band), active ? @" active" : @""]];
+    }
+    return [NSString stringWithFormat:@"%@ (kept fold %.0f)", parts.count ? [parts componentsJoinedByString:@", "] : @"none", LBFoldY];
+}
+
+static CGFloat LBLaptopFold(UIWindow *w) {
+    CGSize size = w.bounds.size;
+    for (id region in LBFoldRegions(w)) {
         if (![region respondsToSelector:@selector(frame)] || ![region respondsToSelector:@selector(isActive)] || ![region isActive]) continue;
         CGRect band = [(UIView *)region frame];
         if (band.size.width >= size.width * 0.8 && band.size.height < band.size.width && CGRectGetMinY(band) > size.height * 0.25)
@@ -307,51 +324,63 @@ static CGFloat LBLaptopFold(UIWindow *w) {
     return 0;
 }
 
+static void LBReadFold(UIWindow *w) {
+    if (!w) return;
+    CGFloat fold = LBLaptopFold(w);
+    LBFoldWindow = w.bounds.size;
+    if (fabs(fold - LBFoldY) < 0.5) return;
+    LBFoldY = fold;
+    LBLog(@"fold: %@", fold > 0 ? [NSString stringWithFormat:@"half open on its side, at %.0f", fold] : @"flat or none");
+    for (UIView *player in LBViewerPlayers()) [player setNeedsLayout];
+}
+
+static void LBReadFoldSoon(UIWindow *w) {
+    __weak UIWindow *weakWindow = w;
+    for (NSNumber *delay in @[@0.0, @0.15, @0.4, @0.8, @1.5])
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            LBReadFold(weakWindow);
+        });
+}
+
+// Applies the kept fold; reads nothing from iOS. The transform is set only when it changes.
 static void LBPlaceViewerVideo(UIView *player) {
     UIWindow *w = player.window;
     BOOL moved = [objc_getAssociatedObject(player, kLBLaptopMoved) boolValue];
-    CGFloat fold = player.bounds.size.height > w.bounds.size.height * 0.5 ? LBLaptopFold(w) : 0;
+    if (w && !CGSizeEqualToSize(w.bounds.size, LBFoldWindow)) LBReadFoldSoon(w);   // turned or folded: read again, later
+    CGFloat fold = w && CGSizeEqualToSize(w.bounds.size, LBFoldWindow) && player.bounds.size.height > w.bounds.size.height * 0.5 ? LBFoldY : 0;
     UIView *output = [player respondsToSelector:@selector(outputView)] ? [(TAVPlayerView *)player outputView] : nil;
     UIView *holder = player.superview;
-    if (!w || !output || !holder || fold <= 0) {
-        if (moved) {
-            player.transform = CGAffineTransformIdentity;
-            objc_setAssociatedObject(player, kLBLaptopMoved, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            LBLog(@"laptop mode off: the video back where X puts it");
+    CGAffineTransform want = CGAffineTransformIdentity;
+    if (fold > 0 && output && holder && [output isDescendantOfView:player]) {
+        // The video's rectangle where X lays it out, from the player's own bounds and centre (its transform aside).
+        CGRect inPlayer = [output convertRect:output.bounds toView:player];
+        CGPoint centre = player.center;
+        CGSize size = player.bounds.size;
+        CGRect video = CGRectOffset(inPlayer, centre.x - size.width / 2 - player.bounds.origin.x, centre.y - size.height / 2 - player.bounds.origin.y);
+        CGRect top = [holder convertRect:CGRectMake(0, 0, w.bounds.size.width, fold) fromView:nil];
+        if (video.size.width >= 1 && video.size.height >= 1 && top.size.height >= 1) {
+            CGFloat scale = MIN(1, MIN(top.size.width / video.size.width, top.size.height / video.size.height));
+            CGFloat tx = CGRectGetMidX(top) - centre.x - scale * (CGRectGetMidX(video) - centre.x);
+            CGFloat ty = CGRectGetMidY(top) - centre.y - scale * (CGRectGetMidY(video) - centre.y);
+            want = CGAffineTransformMake(scale, 0, 0, scale, tx, ty);
         }
-        return;
     }
-    // Measured as X lays it out, then moved: the video's rectangle scaled to fit above the fold and centred there.
-    CGAffineTransform was = player.transform;
-    player.transform = CGAffineTransformIdentity;
-    CGRect video = [output convertRect:output.bounds toView:holder];
-    CGRect top = [holder convertRect:CGRectMake(0, 0, w.bounds.size.width, fold) fromView:nil];
-    CGPoint centre = player.center;
-    player.transform = was;
-    if (video.size.width < 1 || video.size.height < 1) return;
-    CGFloat scale = MIN(1, MIN(top.size.width / video.size.width, top.size.height / video.size.height));
-    CGFloat tx = CGRectGetMidX(top) - centre.x - scale * (CGRectGetMidX(video) - centre.x);
-    CGFloat ty = CGRectGetMidY(top) - centre.y - scale * (CGRectGetMidY(video) - centre.y);
-    CGAffineTransform want = CGAffineTransformMake(scale, 0, 0, scale, tx, ty);
-    if (CGAffineTransformEqualToTransform(was, want)) return;
-    player.transform = want;
-    if (!moved) LBLog(@"laptop mode: the video to the top half (fold at %.0f, scale %.2f)", fold, scale);
-    objc_setAssociatedObject(player, kLBLaptopMoved, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-static void LBPlaceViewerVideos(void) {
-    for (UIView *player in LBViewerPlayers()) LBPlaceViewerVideo(player);
+    BOOL moving = !CGAffineTransformIsIdentity(want);
+    if (!moving && !moved) return;   // never laid a hand on it: X's transform stays X's
+    if (!CGAffineTransformEqualToTransform(player.transform, want)) player.transform = want;
+    if (moving != moved) {
+        LBLog(moving ? @"laptop mode: the video to the top half (fold at %.0f)" : @"laptop mode off: the video back (fold %.0f)", fold);
+        objc_setAssociatedObject(player, kLBLaptopMoved, moving ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
 
 // One hinge interaction per window, from when a viewer first shows there.
 static void LBWatchHinge(UIWindow *w) {
     Class hinge = objc_getClass("UIHingeInteraction");
     if (!w || !hinge || objc_getAssociatedObject(w, kLBHinge) || ![hinge instancesRespondToSelector:@selector(initWithUpdateHandler:)]) return;
+    __weak UIWindow *weakWindow = w;
     id interaction = [(id<LBHingeInteraction>)[hinge alloc] initWithUpdateHandler:^(id hingeInteraction, id update) {
-        for (NSNumber *delay in @[@0.0, @0.15, @0.4, @0.8])
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                LBPlaceViewerVideos();
-            });
+        dispatch_async(dispatch_get_main_queue(), ^{ LBReadFoldSoon(weakWindow); });
     }];
     if (![interaction conformsToProtocol:@protocol(UIInteraction)]) return;
     [w addInteraction:(id<UIInteraction>)interaction];
@@ -372,6 +401,7 @@ static BOOL LBInViewer(UIView *v) {
     if (!self.window || !LBInViewer(self)) return;
     [LBViewerPlayers() addObject:self];
     LBWatchHinge(self.window);
+    LBReadFoldSoon(self.window);
 }
 - (void)layoutSubviews {
     %orig;

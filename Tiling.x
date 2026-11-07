@@ -49,6 +49,8 @@
 @end
 @interface T1ConversationContainerViewController : UIViewController
 @end
+@interface XDSBlur : UIView
+@end
 @interface _TtC13XDesignSystem19ScrollEdgeTreatment : UIView
 @end
 @interface TFNLayoutMetrics : NSObject
@@ -936,6 +938,27 @@ static void LBLiftTweet(UIViewController *tweet) {
 // X's own blur at a list's edges (XDesignSystem's ScrollEdgeTreatment: a blur along the top, one along the
 // bottom). Where the sidebar shows there's no tab bar for the bottom one to sit under, and the top one
 // goes on the screens whose bar is hidden.
+// Kept hidden whatever X asks afterwards (it shows them again as a list scrolls, between the treatment's own
+// layouts, which made the edge flicker), with what X last asked for kept, for when LiquidBird lets go.
+static const void *kLBBlurTrimmed = &kLBBlurTrimmed;
+static const void *kLBBlurAsked = &kLBBlurAsked;
+
+static void LBTrimBlur(UIView *blur, BOOL trim) {
+    BOOL trimmed = [objc_getAssociatedObject(blur, kLBBlurTrimmed) boolValue];
+    if (trim == trimmed) {
+        if (trim && !blur.hidden) blur.hidden = YES;
+        return;
+    }
+    if (trim) {
+        objc_setAssociatedObject(blur, kLBBlurAsked, @(blur.hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        blur.hidden = YES;
+        objc_setAssociatedObject(blur, kLBBlurTrimmed, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else {
+        objc_setAssociatedObject(blur, kLBBlurTrimmed, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        blur.hidden = [objc_getAssociatedObject(blur, kLBBlurAsked) boolValue];
+    }
+}
+
 static void LBTrimEdgeTreatment(UIView *treatment) {
     UIWindow *w = treatment.window;
     BOOL side = LBSidebarWanted(w);
@@ -948,11 +971,19 @@ static void LBTrimEdgeTreatment(UIView *treatment) {
     for (UIView *v in treatment.subviews) {
         if (!blur || ![v isKindOfClass:blur]) continue;
         BOOL bottom = CGRectGetMidY(v.frame) > mid;
-        v.hidden = bottom ? side : barHidden;
+        LBTrimBlur(v, bottom ? side : barHidden);
     }
 }
 
 %group EdgeTreatment
+%hook XDSBlur
+- (void)setHidden:(BOOL)hidden {
+    if (![objc_getAssociatedObject(self, kLBBlurTrimmed) boolValue]) { %orig; return; }
+    objc_setAssociatedObject(self, kLBBlurAsked, @(hidden), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig(YES);
+}
+%end
+
 %hook _TtC13XDesignSystem19ScrollEdgeTreatment
 - (void)layoutSubviews {
     %orig;
@@ -1453,7 +1484,7 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     if (objc_getClass("_TtCC11XNavigation20NavigationControllerP33_501AD6EDA6CFD4B04EC931BB22CF90163Bar") &&
         objc_getClass("_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController")) %init(HomeBar);
     %init(EdgeEffects);
-    if (objc_getClass("_TtC13XDesignSystem19ScrollEdgeTreatment")) %init(EdgeTreatment);
+    if (objc_getClass("_TtC13XDesignSystem19ScrollEdgeTreatment") && objc_getClass("XDSBlur")) %init(EdgeTreatment);
     if (objc_getClass("T1ConversationContainerViewController")) %init(TweetBar);
     if (objc_getClass("T1HostViewController")) %init(Orientation);
     if (objc_getClass("T1TabbedAppNavigationViewController") && objc_getClass("T1TabBarViewController")) %init(Tiling);
