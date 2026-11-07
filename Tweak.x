@@ -16,6 +16,19 @@
 @end
 @interface T1ImmersiveDockMorphAnimator : NSObject @end
 @interface TTACoreAnatomyFeatures : NSObject @end
+@interface TAVPlayerView : UIView
+- (UIView *)outputView;
+@end
+// iOS 27.1's fold and hinge (UIView reserved regions, UIHingeInteraction), called by name: LiquidBird builds
+// against an older SDK.
+@protocol LBHingeInteraction
+- (id)initWithUpdateHandler:(void (^)(id interaction, id update))handler;
+@end
+@interface NSObject (LBFold)
++ (id)divisionRegionKind;
+- (NSArray *)reservedRegionsOfKind:(id)kind options:(NSUInteger)options;
+- (BOOL)isActive;
+@end
 
 // ---------- helpers ----------
 
@@ -140,6 +153,7 @@ static NSHashTable<UIViewController *> *LBImmersives(void) {
 }
 
 void LBLogHomeTimeline(NSString *when);   // Tiling.x: where the Home timeline is scrolled to, in the layout copy
+void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
 static BOOL LBImmersiveShowing(void) {
     for (UIViewController *vc in LBImmersives())
@@ -258,6 +272,114 @@ static BOOL LBDockMorph;
 %end
 %end
 
+// ---------- Laptop mode ----------
+
+// The Duo half open on its side, like a laptop, puts a full-screen video in the top half, above the fold, with the
+// viewer's controls on the half below. Half open, the fold is an active "division" reserved region, a band across
+// the window (-[UIView reservedRegionsOfKind:options:]); a hinge interaction says when it moves, and since the
+// regions fill in a moment after it does, they're read again a few times. The viewer's player (TAVPlayerView,
+// whose outputView is the video's own rectangle) is moved and, if need be, shrunk to fit that half; opened flat,
+// it goes back.
+static const void *kLBHinge = &kLBHinge;
+static const void *kLBLaptopMoved = &kLBLaptopMoved;
+
+static NSHashTable<UIView *> *LBViewerPlayers(void) {
+    static NSHashTable *table;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ table = [NSHashTable weakObjectsHashTable]; });
+    return table;
+}
+
+// The fold's top edge in the window when it's half open with the fold across it (laptop), else 0.
+static CGFloat LBLaptopFold(UIWindow *w) {
+    Class kinds = objc_getClass("UIViewReservedRegionKind");
+    if (!w || !kinds || ![kinds respondsToSelector:@selector(divisionRegionKind)] ||
+        ![w respondsToSelector:@selector(reservedRegionsOfKind:options:)]) return 0;
+    id regions = [w reservedRegionsOfKind:[kinds divisionRegionKind] options:1];   // 1: include inactive ones
+    if (![regions isKindOfClass:NSArray.class]) return 0;
+    CGSize size = w.bounds.size;
+    for (id region in regions) {
+        if (![region respondsToSelector:@selector(frame)] || ![region respondsToSelector:@selector(isActive)] || ![region isActive]) continue;
+        CGRect band = [(UIView *)region frame];
+        if (band.size.width >= size.width * 0.8 && band.size.height < band.size.width && CGRectGetMinY(band) > size.height * 0.25)
+            return CGRectGetMinY(band);
+    }
+    return 0;
+}
+
+static void LBPlaceViewerVideo(UIView *player) {
+    UIWindow *w = player.window;
+    BOOL moved = [objc_getAssociatedObject(player, kLBLaptopMoved) boolValue];
+    CGFloat fold = player.bounds.size.height > w.bounds.size.height * 0.5 ? LBLaptopFold(w) : 0;
+    UIView *output = [player respondsToSelector:@selector(outputView)] ? [(TAVPlayerView *)player outputView] : nil;
+    UIView *holder = player.superview;
+    if (!w || !output || !holder || fold <= 0) {
+        if (moved) {
+            player.transform = CGAffineTransformIdentity;
+            objc_setAssociatedObject(player, kLBLaptopMoved, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            LBLog(@"laptop mode off: the video back where X puts it");
+        }
+        return;
+    }
+    // Measured as X lays it out, then moved: the video's rectangle scaled to fit above the fold and centred there.
+    CGAffineTransform was = player.transform;
+    player.transform = CGAffineTransformIdentity;
+    CGRect video = [output convertRect:output.bounds toView:holder];
+    CGRect top = [holder convertRect:CGRectMake(0, 0, w.bounds.size.width, fold) fromView:nil];
+    CGPoint centre = player.center;
+    player.transform = was;
+    if (video.size.width < 1 || video.size.height < 1) return;
+    CGFloat scale = MIN(1, MIN(top.size.width / video.size.width, top.size.height / video.size.height));
+    CGFloat tx = CGRectGetMidX(top) - centre.x - scale * (CGRectGetMidX(video) - centre.x);
+    CGFloat ty = CGRectGetMidY(top) - centre.y - scale * (CGRectGetMidY(video) - centre.y);
+    CGAffineTransform want = CGAffineTransformMake(scale, 0, 0, scale, tx, ty);
+    if (CGAffineTransformEqualToTransform(was, want)) return;
+    player.transform = want;
+    if (!moved) LBLog(@"laptop mode: the video to the top half (fold at %.0f, scale %.2f)", fold, scale);
+    objc_setAssociatedObject(player, kLBLaptopMoved, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void LBPlaceViewerVideos(void) {
+    for (UIView *player in LBViewerPlayers()) LBPlaceViewerVideo(player);
+}
+
+// One hinge interaction per window, from when a viewer first shows there.
+static void LBWatchHinge(UIWindow *w) {
+    Class hinge = objc_getClass("UIHingeInteraction");
+    if (!w || !hinge || objc_getAssociatedObject(w, kLBHinge) || ![hinge instancesRespondToSelector:@selector(initWithUpdateHandler:)]) return;
+    id interaction = [(id<LBHingeInteraction>)[hinge alloc] initWithUpdateHandler:^(id hingeInteraction, id update) {
+        for (NSNumber *delay in @[@0.0, @0.15, @0.4, @0.8])
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                LBPlaceViewerVideos();
+            });
+    }];
+    if (![interaction conformsToProtocol:@protocol(UIInteraction)]) return;
+    [w addInteraction:(id<UIInteraction>)interaction];
+    objc_setAssociatedObject(w, kLBHinge, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL LBInViewer(UIView *v) {
+    Class viewer = objc_getClass("T1ImmersiveFullScreenViewController");
+    for (UIResponder *r = v.nextResponder; r && viewer; r = r.nextResponder)
+        if ([r isKindOfClass:viewer]) return YES;
+    return NO;
+}
+
+%group LaptopVideo
+%hook TAVPlayerView
+- (void)didMoveToWindow {
+    %orig;
+    if (!self.window || !LBInViewer(self)) return;
+    [LBViewerPlayers() addObject:self];
+    LBWatchHinge(self.window);
+}
+- (void)layoutSubviews {
+    %orig;
+    if ([LBViewerPlayers() containsObject:self]) LBPlaceViewerVideo(self);
+}
+%end
+%end
+
 %group Sports
 // The live games carousel at the top of the home timeline: collapsed rather than just hidden, so it
 // leaves no gap.
@@ -287,6 +409,7 @@ static BOOL LBDockMorph;
     if (objc_getClass("_TtC7XSports22SportsGameCarouselView")) %init(Sports);
     if (objc_getClass("TAVPlayerViewConfiguration")) %init(VideoFit);
     if (objc_getClass("TTACoreAnatomyFeatures")) %init(InlineExpand);
+    if (objc_getClass("TAVPlayerView") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(LaptopVideo);
     if (objc_getClass("T1ImmersiveDockMorphAnimator")) %init(DockMorph);
     if (objc_getClass("TFSFeatureSwitches")) %init(Switches);
     if (objc_getClass("XNAVNavigationController") && objc_getClass("T1ImmersiveFullScreenViewController")) %init(ImmersiveWrapper);
