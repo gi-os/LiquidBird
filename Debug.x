@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 
 extern NSString *LBCPanelStatus;   // Columns.x
+NSString *LBFoldDescription(UIWindow *w);   // Tweak.x: the fold regions iOS reports
 
 // A layout dump for working on LiquidBird without FLEX: press and hold anywhere with three fingers and
 // the window's view and view controller hierarchies are copied to the pasteboard, for Giovanni to paste
@@ -100,7 +101,8 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
         [out appendFormat:@"  %@ level %.0f%@%@ %@ root %@ prefersHidden %d\n", NSStringFromClass(win.class), win.windowLevel,
                           win.hidden ? @" hidden" : @"", win.isKeyWindow ? @" key" : @"", NSStringFromCGRect(win.frame),
                           NSStringFromClass(win.rootViewController.class), win.rootViewController.prefersStatusBarHidden];
-    [out appendFormat:@"Explore panel: %@\n\n", LBCPanelStatus];
+    [out appendFormat:@"Explore panel: %@\n", LBCPanelStatus];
+    [out appendFormat:@"fold: %@\n\n", LBFoldDescription(w)];
     [out appendString:@"== LiquidBird's layout changes (seconds before this copy)\n"];
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     for (NSArray *entry in LBLogLines())
