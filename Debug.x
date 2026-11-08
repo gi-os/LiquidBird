@@ -5,6 +5,10 @@
 #import <fcntl.h>
 #import <unistd.h>
 
+// When this build was made: every crash record carries it, so the layout copy can tell a crash from an earlier
+// build (kept until the next crash) from one in this build.
+static const char LBBuild[] = __DATE__ " " __TIME__;
+
 extern NSString *LBCPanelStatus;   // Columns.x
 NSString *LBFoldDescription(UIWindow *w);   // Tweak.x: the fold regions iOS reports
 
@@ -108,7 +112,9 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
     [out appendFormat:@"Explore panel: %@\n", LBCPanelStatus];
     [out appendFormat:@"fold: %@\n", LBFoldDescription(w)];
     NSString *crash = [NSUserDefaults.standardUserDefaults stringForKey:@"liquidbird_last_crash"];
-    [out appendFormat:@"last crash: %@\n\n", crash ?: @"none recorded"];
+    BOOL thisBuild = [crash containsString:[NSString stringWithFormat:@"build %s,", LBBuild]];
+    [out appendFormat:@"last crash%@: %@\n\n", !crash ? @"" : thisBuild ? @" (this build)" : @" (an earlier build, none in this one)",
+                      crash ?: @"none recorded"];
     [out appendString:@"== LiquidBird's layout changes (seconds before this copy)\n"];
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     for (NSArray *entry in LBLogLines())
@@ -178,7 +184,7 @@ static int LBCrashFile = -1;
 
 static void LBRecordException(NSException *e) {
     NSArray<NSString *> *stack = [e.callStackSymbols subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)24, e.callStackSymbols.count))];
-    NSString *line = [NSString stringWithFormat:@"%@ %@: %@\n%@", NSDate.date, e.name, e.reason,
+    NSString *line = [NSString stringWithFormat:@"%@ build %s, %@: %@\n%@", NSDate.date, LBBuild, e.name, e.reason,
                       [stack componentsJoinedByString:@"\n"]];
     [NSUserDefaults.standardUserDefaults setObject:line forKey:@"liquidbird_last_crash"];
     [NSUserDefaults.standardUserDefaults synchronize];
@@ -189,8 +195,8 @@ static struct sigaction LBPreviousSignal[32];
 
 static void LBRecordSignal(int sig, siginfo_t *info, void *context) {
     if (LBCrashFile >= 0) {
-        char head[64];
-        int n = snprintf(head, sizeof head, "signal %d at %p\n", sig, info ? info->si_addr : NULL);
+        char head[96];
+        int n = snprintf(head, sizeof head, "build %s, signal %d at %p\n", LBBuild, sig, info ? info->si_addr : NULL);
         if (n > 0) write(LBCrashFile, head, (size_t)n);
         void *frames[32];
         int count = backtrace(frames, 32);

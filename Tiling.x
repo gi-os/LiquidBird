@@ -1310,11 +1310,10 @@ void LBLogHomeTimeline(NSString *when) {
 // As X's full-screen viewer starts closing (T1ImmersiveAnimator -prepareToReappear -> -prepareSourceForDismissal ->
 // -prepareMediaOriginForDismissal), the photo's place in the timeline (T1TimelineMediaOriginCoordinatorFactory's
 // prepare block) scrolls each list it sits in, with tfn_programmaticallySetContentOffset:animated:, until the photo is
-// inside the list's safe area with 8pt to spare. Where the sidebar shows, X's tab bar is faded out but its band still
-// counts as covering the bottom (the navigation's 108pt additional safe area, 142pt with the home indicator), so a photo
-// in full view near the bottom sent the timeline up as it closed. A scroll toward later posts is shortened by that band
-// (the list stays put if that's all it was); X's other corrections (a photo under the row of timelines, or really off
-// the screen) go ahead, and sideways ones (a carousel turning to the photo you ended on) are left alone.
+// inside the list's safe area with 8pt to spare. Any such nudge reads as the timeline jumping as the photo closes
+// (where the sidebar shows, X even counts its faded tab bar's band as covering the bottom). So the list stays where
+// it was unless the photo has moved well out of view (you went on to other posts inside the viewer): a move of less
+// than half the list's height is dropped. Sideways ones (a carousel turning to the photo you ended on) are left alone.
 static BOOL LBClosingPhoto;
 
 %group PhotoReturn
@@ -1332,19 +1331,10 @@ static BOOL LBClosingPhoto;
 - (void)tfn_programmaticallySetContentOffset:(CGPoint)offset animated:(BOOL)animated {
     CGPoint now = self.contentOffset;
     if (!LBClosingPhoto || fabs(offset.x - now.x) >= 0.5) { %orig; return; }
-    UIWindow *w = self.window;
-    CGFloat y = offset.y;
-    if (y > now.y && LBSidebarWanted(w)) {
-        // The faded tab bar's band: the list's safe area past the window's own (the home indicator). A real bar
-        // (an opened tweet's reply bar, in its scroll indicator insets) still counts.
-        CGFloat band = MAX(0, self.safeAreaInsets.bottom - w.safeAreaInsets.bottom);
-        y = MAX(now.y, y - band);
-    }
-    BOOL kept = fabs(y - offset.y) >= 0.5;
+    BOOL nudge = fabs(offset.y - now.y) < self.bounds.size.height * 0.5;
     LBLog(@"closing photo: X scrolls %@ %.0f -> %.0f%@", NSStringFromClass(self.class), now.y, offset.y,
-          kept ? [NSString stringWithFormat:@", kept to %.0f (its tab bar's band is empty)", y] : @"");
-    if (fabs(y - now.y) < 0.001) return;
-    %orig(CGPointMake(offset.x, y), animated);
+          nudge ? @", kept where it was" : @"");
+    if (!nudge) %orig;
 }
 %end
 %end
