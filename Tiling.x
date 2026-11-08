@@ -127,18 +127,36 @@ static BOOL LBSidebarWanted(UIWindow *w) {
     return w.bounds.size.width >= LBSidebarWindow || LBSideStrip(w) > 0;
 }
 
+// Split under another app (its video above, the Duo held upright), the app's window is the lower pane, yet iOS gives
+// it the whole screen's top safe area, the 82pt the status bar takes along the screen's top, though the status bar
+// isn't in this pane and nothing shows there: an empty band over the tabs. Told by where the window sits on the
+// screen.
+static BOOL LBBelowAnotherApp(UIWindow *w) {
+    UIScreen *screen = w.windowScene.screen;
+    if (!screen || w.bounds.size.height >= screen.bounds.size.height - 1) return NO;
+    return CGRectGetMinY([w convertRect:w.bounds toCoordinateSpace:screen.coordinateSpace]) >= 1;
+}
+
+// The top safe area the app's screens should keep: none in a lower pane (above).
+static CGFloat LBTopInset(UIWindow *w) { return LBBelowAnotherApp(w) ? 0 : w.safeAreaInsets.top; }
+
 // While the status bar is hidden the app's own screens keep the strip's inset (the root's additional safe
 // area stands in for it), so the timeline doesn't rewrap and jump; what's presented over them, the media
-// viewer, gets the whole screen.
+// viewer, gets the whole screen. In a lower pane the top safe area is taken back (a negative additional inset).
 static void LBKeepSideStrip(UIViewController *root) {
     UIWindow *w = root.viewIfLoaded.window;
     if (!w || w.rootViewController != root) return;
     CGFloat strip = LBSideStrip(w);
     CGFloat want = strip > 0 ? MAX(0, strip - w.safeAreaInsets.right) : 0;
+    CGFloat top = LBTopInset(w) - w.safeAreaInsets.top;
     UIEdgeInsets extra = root.additionalSafeAreaInsets;
-    if (fabs(extra.right - want) < 0.5) return;
-    LBLog(@"root right inset %.0f -> %.0f (strip %.0f, system %.0f)", extra.right, want, strip, w.safeAreaInsets.right);
+    if (fabs(extra.right - want) < 0.5 && fabs(extra.top - top) < 0.5) return;
+    if (fabs(extra.right - want) >= 0.5)
+        LBLog(@"root right inset %.0f -> %.0f (strip %.0f, system %.0f)", extra.right, want, strip, w.safeAreaInsets.right);
+    if (fabs(extra.top - top) >= 0.5)
+        LBLog(@"root top inset %.0f -> %.0f (%@, system %.0f)", extra.top, top, top < 0 ? @"a pane under another app" : @"its own screen", w.safeAreaInsets.top);
     extra.right = want;
+    extra.top = top;
     root.additionalSafeAreaInsets = extra;
 }
 
@@ -862,7 +880,7 @@ static void LBShiftHome(UIViewController *home) {
     // the row stays below it. Measured with the status bar showing, which hiding it (a photo) would change.
     BOOL statusBar = !w.windowScene.statusBarManager.isStatusBarHidden;
     if (upright && statusBar && barFrame.origin.y >= 0 && barFrame.size.height > 20 && CGRectGetMaxY(barFrame) < 160) {
-        CGFloat measured = MAX(0, round(CGRectGetMaxY(barFrame) - w.safeAreaInsets.top - 6));
+        CGFloat measured = MAX(0, round(CGRectGetMaxY(barFrame) - LBTopInset(w) - 6));
         if (fabs(measured - shift) >= 0.5) {
             LBLog(@"Home shift %.0f -> %.0f (bar %@)", shift, measured, NSStringFromCGRect(barFrame));
             shift = measured;
