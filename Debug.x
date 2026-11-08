@@ -246,6 +246,12 @@ static void LBWatchCrashes(void) {
 @interface TFNTableView : UITableView
 @end
 
+// Whether a class descends from another, without messaging it (which would initialise X's class at load).
+static BOOL LBDescends(Class c, Class base) {
+    for (; c; c = class_getSuperclass(c)) if (c == base) return YES;
+    return NO;
+}
+
 static NSString *LBCallers(NSUInteger skip, NSUInteger count) {
     NSArray<NSNumber *> *addresses = NSThread.callStackReturnAddresses;
     NSMutableArray *parts = [NSMutableArray array];
@@ -317,7 +323,7 @@ static void LBWatchTopPost(UITableView *table) {
 %ctor {
     LBWatchCrashes();
     %init;
-    if ([objc_getClass("TFNTableView") isSubclassOfClass:UITableView.class]) %init(TimelineJumps);
+    if (LBDescends(objc_getClass("TFNTableView"), objc_getClass("UITableView"))) %init(TimelineJumps);
     if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler") && objc_getClass("T1StandardStatusInlineExpansionHelper"))
         %init(ShowMore);
 }
