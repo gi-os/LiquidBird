@@ -1,5 +1,9 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <execinfo.h>
+#import <signal.h>
+#import <fcntl.h>
+#import <unistd.h>
 
 extern NSString *LBCPanelStatus;   // Columns.x
 NSString *LBFoldDescription(UIWindow *w);   // Tweak.x: the fold regions iOS reports
@@ -102,7 +106,9 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
                           win.hidden ? @" hidden" : @"", win.isKeyWindow ? @" key" : @"", NSStringFromCGRect(win.frame),
                           NSStringFromClass(win.rootViewController.class), win.rootViewController.prefersStatusBarHidden];
     [out appendFormat:@"Explore panel: %@\n", LBCPanelStatus];
-    [out appendFormat:@"fold: %@\n\n", LBFoldDescription(w)];
+    [out appendFormat:@"fold: %@\n", LBFoldDescription(w)];
+    NSString *crash = [NSUserDefaults.standardUserDefaults stringForKey:@"liquidbird_last_crash"];
+    [out appendFormat:@"last crash: %@\n\n", crash ?: @"none recorded"];
     [out appendString:@"== LiquidBird's layout changes (seconds before this copy)\n"];
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     for (NSArray *entry in LBLogLines())
@@ -164,7 +170,68 @@ static const void *kLBDumpGesture = &kLBDumpGesture;
 %end
 %end
 
+// The last crash, for the layout copy: an uncaught exception's reason and where it was thrown, or the signal and
+// the stack, kept in the defaults (no tweet text: symbols and offsets only). The handlers before LiquidBird's
+// (Crashlytics) still run.
+static NSUncaughtExceptionHandler *LBPreviousExceptionHandler;
+static int LBCrashFile = -1;
+
+static void LBRecordException(NSException *e) {
+    NSArray<NSString *> *stack = [e.callStackSymbols subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)24, e.callStackSymbols.count))];
+    NSString *line = [NSString stringWithFormat:@"%@ %@: %@\n%@", NSDate.date, e.name, e.reason,
+                      [stack componentsJoinedByString:@"\n"]];
+    [NSUserDefaults.standardUserDefaults setObject:line forKey:@"liquidbird_last_crash"];
+    [NSUserDefaults.standardUserDefaults synchronize];
+    if (LBPreviousExceptionHandler) LBPreviousExceptionHandler(e);
+}
+
+static struct sigaction LBPreviousSignal[32];
+
+static void LBRecordSignal(int sig, siginfo_t *info, void *context) {
+    if (LBCrashFile >= 0) {
+        char head[64];
+        int n = snprintf(head, sizeof head, "signal %d at %p\n", sig, info ? info->si_addr : NULL);
+        if (n > 0) write(LBCrashFile, head, (size_t)n);
+        void *frames[32];
+        int count = backtrace(frames, 32);
+        backtrace_symbols_fd(frames, count, LBCrashFile);
+        fsync(LBCrashFile);
+    }
+    struct sigaction previous = LBPreviousSignal[sig];
+    if (previous.sa_flags & SA_SIGINFO && previous.sa_sigaction) previous.sa_sigaction(sig, info, context);
+    else if (previous.sa_handler && previous.sa_handler != SIG_IGN && previous.sa_handler != SIG_DFL) previous.sa_handler(sig);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static NSString *LBSignalLogPath(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"liquidbird-crash.txt"];
+}
+
+static void LBWatchCrashes(void) {
+    // A signal last time left its stack in the file: kept as the last crash, and the file emptied.
+    NSString *path = LBSignalLogPath();
+    NSString *signalled = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (signalled.length) {
+        NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+        [NSUserDefaults.standardUserDefaults setObject:[NSString stringWithFormat:@"%@ %@", attributes.fileModificationDate, signalled]
+                                                forKey:@"liquidbird_last_crash"];
+    }
+    LBCrashFile = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    LBPreviousExceptionHandler = NSGetUncaughtExceptionHandler();
+    NSSetUncaughtExceptionHandler(LBRecordException);
+    for (int sig = 1; sig < 32; sig++) {
+        if (sig != SIGSEGV && sig != SIGBUS && sig != SIGILL && sig != SIGTRAP && sig != SIGFPE) continue;
+        struct sigaction action = {0};
+        action.sa_sigaction = LBRecordSignal;
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&action.sa_mask);
+        sigaction(sig, &action, &LBPreviousSignal[sig]);
+    }
+}
+
 %ctor {
+    LBWatchCrashes();
     %init;
     if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler") && objc_getClass("T1StandardStatusInlineExpansionHelper"))
         %init(ShowMore);

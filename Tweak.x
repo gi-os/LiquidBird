@@ -292,12 +292,19 @@ static NSHashTable<UIView *> *LBViewerPlayers(void) {
     return table;
 }
 
+// Asked only of a settled window (folding moves the app between screens), and never allowed to take the app down.
 static NSArray *LBFoldRegions(UIWindow *w) {
     Class kinds = objc_getClass("UIViewReservedRegionKind");
-    if (!w || !kinds || ![kinds respondsToSelector:@selector(divisionRegionKind)] ||
+    if (!w || w.hidden || !w.windowScene || w.windowScene.activationState != UISceneActivationStateForegroundActive ||
+        !kinds || ![kinds respondsToSelector:@selector(divisionRegionKind)] ||
         ![w respondsToSelector:@selector(reservedRegionsOfKind:options:)]) return nil;
-    id regions = [w reservedRegionsOfKind:[kinds divisionRegionKind] options:1];   // 1: include inactive ones
-    return [regions isKindOfClass:NSArray.class] ? regions : nil;
+    @try {
+        id regions = [w reservedRegionsOfKind:[kinds divisionRegionKind] options:1];   // 1: include inactive ones
+        return [regions isKindOfClass:NSArray.class] ? regions : nil;
+    } @catch (NSException *e) {
+        LBLog(@"fold regions: %@", e.reason);
+        return nil;
+    }
 }
 
 // For the layout copy: the fold regions as iOS reports them.
@@ -379,12 +386,16 @@ static void LBWatchHinge(UIWindow *w) {
     Class hinge = objc_getClass("UIHingeInteraction");
     if (!w || !hinge || objc_getAssociatedObject(w, kLBHinge) || ![hinge instancesRespondToSelector:@selector(initWithUpdateHandler:)]) return;
     __weak UIWindow *weakWindow = w;
-    id interaction = [(id<LBHingeInteraction>)[hinge alloc] initWithUpdateHandler:^(id hingeInteraction, id update) {
-        dispatch_async(dispatch_get_main_queue(), ^{ LBReadFoldSoon(weakWindow); });
-    }];
-    if (![interaction conformsToProtocol:@protocol(UIInteraction)]) return;
-    [w addInteraction:(id<UIInteraction>)interaction];
-    objc_setAssociatedObject(w, kLBHinge, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    @try {
+        id interaction = [(id<LBHingeInteraction>)[hinge alloc] initWithUpdateHandler:^(id hingeInteraction, id update) {
+            dispatch_async(dispatch_get_main_queue(), ^{ LBReadFoldSoon(weakWindow); });
+        }];
+        if (![interaction conformsToProtocol:@protocol(UIInteraction)]) return;
+        [w addInteraction:(id<UIInteraction>)interaction];
+        objc_setAssociatedObject(w, kLBHinge, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (NSException *e) {
+        LBLog(@"hinge interaction: %@", e.reason);
+    }
 }
 
 static BOOL LBInViewer(UIView *v) {
