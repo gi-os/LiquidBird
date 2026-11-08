@@ -1344,6 +1344,82 @@ static BOOL LBClosingPhoto;
 %end
 %end
 
+// MARK: - Keeping your place across size changes
+
+// Folding, unfolding, a split under another app's video and the app switcher's snapshots all change a timeline's
+// width, and with it every post's height (the Home timeline ran 17180pt tall at one width, 30888pt at another).
+// UIKit then keeps the same fraction of the way down, not the post you were on, landing thousands of points away
+// (the layout copy's "Home timeline jumped" lines, UIKit setting the offset). So while the width holds, the post at
+// the top of the visible area and how far into it you'd scrolled are kept, and when it changes they're put back,
+// over the layouts of the next moment (UIKit and X's own estimated-height corrections move it again after the
+// first), unless the finger's on the list.
+@interface TFNTableView : UITableView
+@end
+
+// Whether a class descends from another, without messaging it (which would initialise X's class at load).
+static BOOL LBDescends(Class c, Class base) {
+    for (; c; c = class_getSuperclass(c)) if (c == base) return YES;
+    return NO;
+}
+
+typedef struct { NSInteger section, row; CGFloat into; BOOL atTop; } LBPlace;
+static const void *kLBPlace = &kLBPlace;
+static const void *kLBPlaceWidth = &kLBPlaceWidth;
+static const void *kLBPlaceUntil = &kLBPlaceUntil;
+
+static void LBKeepPlace(UITableView *table) {
+    if (!table.window) return;
+    CGFloat width = table.bounds.size.width;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    NSNumber *was = objc_getAssociatedObject(table, kLBPlaceWidth);
+    NSValue *kept = objc_getAssociatedObject(table, kLBPlace);
+    if (was && fabs(was.doubleValue - width) >= 0.5 && kept)
+        objc_setAssociatedObject(table, kLBPlaceUntil, @(now + 0.6), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!was || fabs(was.doubleValue - width) >= 0.5)
+        objc_setAssociatedObject(table, kLBPlaceWidth, @(width), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    BOOL finger = table.isTracking || table.isDragging || table.isDecelerating;
+    UIEdgeInsets inset = table.adjustedContentInset;
+    CGFloat top = table.contentOffset.y + inset.top;
+    if (kept && !finger && now < [objc_getAssociatedObject(table, kLBPlaceUntil) doubleValue]) {
+        LBPlace place;
+        [kept getValue:&place size:sizeof place];
+        CGFloat target = -inset.top;
+        if (!place.atTop) {
+            if (place.section >= table.numberOfSections || place.row >= [table numberOfRowsInSection:place.section]) return;
+            CGRect row = [table rectForRowAtIndexPath:[NSIndexPath indexPathForRow:place.row inSection:place.section]];
+            target = row.origin.y + MIN(place.into, MAX(0, row.size.height - 1)) - inset.top;
+            CGFloat end = MAX(-inset.top, table.contentSize.height + inset.bottom - table.bounds.size.height);
+            target = MIN(MAX(target, -inset.top), end);
+        }
+        if (fabs(target - table.contentOffset.y) < 1) return;
+        LBLog(@"%@ kept its place across a width change: %.0f -> %.0f", table.accessibilityIdentifier ?: @"a timeline",
+              table.contentOffset.y, target);
+        table.contentOffset = CGPointMake(table.contentOffset.x, target);
+        return;
+    }
+    // Where you are, while the width holds: the first row reaching below the top of the visible area.
+    LBPlace place = { 0, 0, 0, table.contentOffset.y <= -inset.top + 1 };
+    if (!place.atTop) {
+        NSIndexPath *first = nil;
+        for (NSIndexPath *path in table.indexPathsForVisibleRows)
+            if (CGRectGetMaxY([table rectForRowAtIndexPath:path]) > top && (!first || [path compare:first] == NSOrderedAscending)) first = path;
+        if (!first) return;
+        place.section = first.section;
+        place.row = first.row;
+        place.into = top - [table rectForRowAtIndexPath:first].origin.y;
+    }
+    objc_setAssociatedObject(table, kLBPlace, [NSValue valueWithBytes:&place objCType:@encode(LBPlace)], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+%group KeepPlace
+%hook TFNTableView
+- (void)layoutSubviews {
+    %orig;
+    LBKeepPlace(self);
+}
+%end
+%end
+
 // MARK: - Scroll edge effects
 
 // iOS 26 blurs a scroll view's edge where a bar sits over it. With the tab bar replaced by the sidebar,
@@ -1487,4 +1563,5 @@ static void LBApplyTiling(T1TabbedAppNavigationViewController *nav) {
     // Looked up without messaging the classes, so nothing of X's is initialised while LiquidBird loads.
     if (class_getInstanceMethod(objc_getClass("T1ImmersiveFullScreenViewController"), sel_registerName("prepareMediaOriginForDismissal")) &&
         class_getInstanceMethod(UIScrollView.class, sel_registerName("tfn_programmaticallySetContentOffset:animated:"))) %init(PhotoReturn);
+    if (LBDescends(objc_getClass("TFNTableView"), objc_getClass("UITableView"))) %init(KeepPlace);
 }
