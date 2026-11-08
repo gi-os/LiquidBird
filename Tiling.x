@@ -841,8 +841,13 @@ static void LBShiftHome(UIViewController *home) {
     if (!view || !container || !view.window) return;
     // Folded, a photo turned sideways turns the feed under it, and its compact bar isn't Home's: measured
     // only in the app's own pose (upright on a phone, Orientation below), placed with the kept values meanwhile.
+    // A window wider than it's tall is that only with the scene turned too: split under another app's video, the
+    // Duo held upright gives the app a pane wider than it's tall (669x565), and there the bar is Home's.
     UIWindow *w = view.window;
     BOOL upright = w.bounds.size.width <= w.bounds.size.height || MIN(w.bounds.size.width, w.bounds.size.height) >= LBSidebarWindow;
+    if (!upright) {
+        if (@available(iOS 16, *)) upright = UIInterfaceOrientationIsPortrait(w.windowScene.effectiveGeometry.interfaceOrientation);
+    }
     // X puts the row of timelines at its bar's bottom edge. Measured from the bar whenever it's fully
     // shown (not collapsed on scroll), as the latest value, not the largest ever seen: one odd layout
     // (unfolding) once left Home shifted far enough to hide the row.
