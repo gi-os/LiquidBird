@@ -667,12 +667,21 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
     return frame;
 }
 
+// X makes the search screen's live field as the screen is pushed from a search capsule (Explore's static
+// search bar, which it morphs into the field); opened as a column there's no such push, and no field to type
+// in. So that push stays on its own stack.
+static BOOL LBCPushedFromSearchBar(UINavigationController *nav, UIViewController *vc) {
+    Class search = objc_getClass("TTSSearchContainerViewController"), capsule = objc_getClass("TTSStaticSearchBarView");
+    return search && capsule && [vc isKindOfClass:search] &&
+        [nav.topViewController.navigationItem.titleView isKindOfClass:capsule];
+}
+
 %group Columns
 %hook XNAVNavigationController
 - (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
     if (LBCPassThrough || !vc || self.viewControllers.count == 0) { %orig; return; }
     UIWindow *w = self.viewIfLoaded.window;
-    if (!LBCColumnsWanted(w)) { %orig; return; }
+    if (!LBCColumnsWanted(w) || LBCPushedFromSearchBar(self, vc)) { %orig; return; }
     // Pushed on a tab's own stack, not in a sheet.
     UIViewController *tabs = self.parentViewController;
     if (self.presentingViewController || ![tabs isKindOfClass:objc_getClass("_TtC11XNavigation16TabBarController")]) {
@@ -752,6 +761,29 @@ CGRect LBCFitScreen(UIViewController *vc, CGRect frame) {
 %end
 %end
 
+// X's side menu (the Dash panel) opens with a swipe to the right from anywhere; over open columns that swipe is
+// theirs (sliding them, or throwing them away to the right), so the menu doesn't take a touch that starts there.
+static BOOL LBCTouchOnColumns(UIView *v) {
+    for (; v; v = v.superview)
+        if ([v isKindOfClass:LBCStrip.class]) return ((LBCStrip *)v).count > 0 && !v.hidden;
+    return NO;
+}
+
+@interface T1AppSplitViewController : UIViewController
+@end
+
+%group SideMenuSwipe
+%hook T1AppSplitViewController
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldReceiveTouch:(UITouch *)touch {
+    if (LBCTouchOnColumns(touch.view)) return NO;
+    return %orig;
+}
+%end
+%end
+
 %ctor {
-    if (objc_getClass("XNAVNavigationController") && objc_getClass("_TtC11XNavigation16TabBarController")) %init(Columns);
+    if (objc_getClass("XNAVNavigationController") && objc_getClass("_TtC11XNavigation16TabBarController")) {
+        %init(Columns);
+        if (objc_getClass("T1AppSplitViewController")) %init(SideMenuSwipe);
+    }
 }
