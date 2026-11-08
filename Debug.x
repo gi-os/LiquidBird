@@ -4,6 +4,7 @@
 #import <signal.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <dlfcn.h>
 
 // When this build was made: every crash record carries it, so the layout copy can tell a crash from an earlier
 // build (kept until the next crash) from one in this build.
@@ -236,9 +237,87 @@ static void LBWatchCrashes(void) {
     }
 }
 
+// MARK: - Jumps in the Home timeline
+
+// For the layout copy: where the Home timeline moved without the finger asking. A jump of its scroll position, or a
+// scroll something asked for, is logged with the code that asked (image+offset, which scripts/objc_find.py places in
+// a method); posts that moved on screen with no scroll at all (a post above them changing height) are logged with how
+// far. Offsets and sizes only, no post text.
+@interface TFNTableView : UITableView
+@end
+
+static NSString *LBCallers(NSUInteger skip, NSUInteger count) {
+    NSArray<NSNumber *> *addresses = NSThread.callStackReturnAddresses;
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSUInteger i = skip; i < addresses.count && parts.count < count; i++) {
+        Dl_info info;
+        uintptr_t pc = (uintptr_t)addresses[i].unsignedLongValue;
+        if (!dladdr((void *)pc, &info) || !info.dli_fname) continue;
+        NSString *image = @(info.dli_fname).lastPathComponent;
+        if ([image hasPrefix:@"libobjc"]) continue;
+        [parts addObject:[NSString stringWithFormat:@"%@+0x%lx", image, (unsigned long)(pc - (uintptr_t)info.dli_fbase)]];
+    }
+    return [parts componentsJoinedByString:@" < "];
+}
+
+static BOOL LBIsHomeTimeline(UIScrollView *s) { return [s.accessibilityIdentifier isEqualToString:@"THFHomeTimelineItems Table"]; }
+static NSString *LBFinger(UIScrollView *s) {
+    return s.isTracking ? @" under the finger" : s.isDecelerating ? @" mid-fling" : @"";
+}
+static BOOL LBScrollAsked;   // inside setContentOffset:animated:, which logs it
+
+// The topmost post on screen and where it was: if it moved by more than the scroll did, the posts jumped.
+static void LBWatchTopPost(UITableView *table) {
+    static __weak UITableViewCell *cell;
+    static NSString *post;
+    static CGFloat y, offset;
+    CGFloat top = table.contentOffset.y + table.adjustedContentInset.top;
+    UITableViewCell *first = nil;
+    for (UITableViewCell *c in table.visibleCells)
+        if (!c.hidden && CGRectGetMaxY(c.frame) > top) { first = c; break; }
+    NSString *identifier = first.accessibilityIdentifier;
+    if (first && first == cell && identifier && [identifier isEqualToString:post]) {
+        CGFloat moved = (first.frame.origin.y - y) - (table.contentOffset.y - offset);
+        if (fabs(moved) >= 80)
+            LBLog(@"Home timeline: the posts on screen moved %.0f %@ with no scroll%@ (content %.0f)", fabs(moved),
+                  moved > 0 ? @"down" : @"up", LBFinger(table), table.contentSize.height);
+    }
+    cell = first;
+    post = identifier;
+    y = first.frame.origin.y;
+    offset = table.contentOffset.y;
+}
+
+%group TimelineJumps
+%hook TFNTableView
+- (void)setContentOffset:(CGPoint)target {
+    CGFloat from = self.contentOffset.y;
+    %orig;
+    if (!LBScrollAsked && fabs(target.y - from) >= 200 && LBIsHomeTimeline(self))
+        LBLog(@"Home timeline jumped %.0f -> %.0f%@ (content %.0f): %@", from, target.y, LBFinger(self), self.contentSize.height,
+              LBCallers(1, 6));
+}
+- (void)setContentOffset:(CGPoint)target animated:(BOOL)animated {
+    CGFloat from = self.contentOffset.y;
+    if (fabs(target.y - from) >= 100 && LBIsHomeTimeline(self))
+        LBLog(@"Home timeline scrolled%@ %.0f -> %.0f%@: %@", animated ? @" (animated)" : @"", from, target.y, LBFinger(self),
+              LBCallers(1, 6));
+    BOOL was = LBScrollAsked;
+    LBScrollAsked = YES;
+    %orig;
+    LBScrollAsked = was;
+}
+- (void)layoutSubviews {
+    %orig;
+    if (LBIsHomeTimeline(self)) LBWatchTopPost(self);
+}
+%end
+%end
+
 %ctor {
     LBWatchCrashes();
     %init;
+    if ([objc_getClass("TFNTableView") isSubclassOfClass:UITableView.class]) %init(TimelineJumps);
     if (objc_getClass("T1StatusViewTruncationTokenAreaTapEventHandler") && objc_getClass("T1StandardStatusInlineExpansionHelper"))
         %init(ShowMore);
 }
