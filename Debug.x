@@ -112,6 +112,9 @@ static void LBDumpViewController(UIViewController *vc, NSInteger depth, NSMutabl
                           NSStringFromClass(win.rootViewController.class), win.rootViewController.prefersStatusBarHidden];
     [out appendFormat:@"Explore panel: %@\n", LBCPanelStatus];
     [out appendFormat:@"fold: %@\n", LBFoldDescription(w)];
+    if (w.windowScene.screen)
+        [out appendFormat:@"on screen: %@ of %@\n", NSStringFromCGRect([w convertRect:w.bounds toCoordinateSpace:w.windowScene.screen.coordinateSpace]),
+                          NSStringFromCGSize(w.windowScene.screen.bounds.size)];
     NSString *crash = [NSUserDefaults.standardUserDefaults stringForKey:@"liquidbird_last_crash"];
     BOOL thisBuild = [crash containsString:[NSString stringWithFormat:@"build %s,", LBBuild]];
     [out appendFormat:@"last crash%@: %@\n\n", !crash ? @"" : thisBuild ? @" (this build)" : @" (an earlier build, none in this one)",
