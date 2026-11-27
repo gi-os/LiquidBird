@@ -33,6 +33,7 @@ static const CGFloat LBCPreferred = 476, LBCMinimum = 400, LBCSliver = 160;
 static BOOL LBCPassThrough;   // pushes the strip makes itself, folding columns back onto the stack
 
 CGFloat LBSidebarStrip(UIWindow *w);   // Tiling.x: the sidebar's width (the status bar's strip, or its default)
+void LBSidebarSetSolid(UIWindow *w, BOOL solid);   // Tiling.x: the sidebar's strip black (a panel open) or clear
 void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
 static CGFloat LBCAvailable(UIWindow *w) { return w ? w.bounds.size.width - LBSidebarStrip(w) : 0; }
@@ -73,6 +74,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     NSMutableArray<UIView *> *_cards;
     NSMutableArray<UINavigationController *> *_navigations;
     __weak UIView *_touched;
+    NSInteger _leaving;   // columns still sliding away
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -102,6 +104,12 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
 }
 
 - (NSUInteger)count { return _cards.count; }
+
+// The sidebar's strip is black only while a panel is open or still sliding away under it; the feed shows under
+// its glass the rest of the time.
+- (void)syncSidebar {
+    LBSidebarSetSolid(self.window, _cards.count > 0 || _leaving > 0);
+}
 - (CGFloat)columnWidth { return round(MIN(LBCPreferred, self.bounds.size.width - LBCSliver)); }
 // Where the first column rests: past the root's sliver, or at the leading edge with the feed on the right.
 - (CGFloat)firstColumnX { return self.fromLeading ? 0 : self.bounds.size.width - self.columnWidth; }
@@ -238,6 +246,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
         self.hidden = NO;
         [self setNeedsLayout];
         [self layoutIfNeeded];
+        [self syncSidebar];
     } @catch (NSException *e) {
         // Nothing half-made is left behind (no empty column, no ✕ that closes nothing): the caller pushes vc
         // as usual, with its own back button.
@@ -277,11 +286,14 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
         [_navigations removeLastObject];
         [nav willMoveToParentViewController:nil];
         if (slide) {
+            _leaving++;
             [UIView animateWithDuration:0.3 animations:^{
                 card.transform = CGAffineTransformMakeTranslation(card.bounds.size.width + 40, 0);
             } completion:^(BOOL finished) {
                 [self remove:card navigation:nav];
+                self->_leaving--;
                 if (!self->_cards.count) self.hidden = YES;
+                [self syncSidebar];
             }];
         } else {
             [self remove:card navigation:nav];
@@ -294,6 +306,7 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
         if (slide) [UIView animateWithDuration:0.3 animations:^{ self->_dim.alpha = 0; }];
         else { _dim.alpha = 0; self.hidden = YES; }
     }
+    [self syncSidebar];
 }
 
 // Folded, there's no room for columns: what they show goes back on the tab's stack, in order, with
@@ -324,11 +337,14 @@ static UINavigationController *LBCMakeNavigation(UIViewController *vc) {
     [_navigations removeAllObjects];
     for (UINavigationController *nav in navigations) [nav willMoveToParentViewController:nil];
     CGFloat distance = (self.bounds.size.width + 40) * (left ? -1 : 1);
+    _leaving++;
     [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
         for (UIView *card in cards) card.transform = CGAffineTransformMakeTranslation(distance, 0);
         self->_dim.alpha = 0;
     } completion:^(BOOL finished) {
         for (NSUInteger i = 0; i < cards.count; i++) [self remove:cards[i] navigation:navigations[i]];
+        self->_leaving--;
+        [self syncSidebar];
         // A column opened meanwhile stays.
         if (!self->_cards.count) {
             self.hidden = YES;
@@ -599,7 +615,7 @@ static void LBCLayoutPanel(UIViewController *tabs) {
     // first load (it never finished), so until it's been opened the panel's place says so instead.
     LBCShowHint(view, wide && LBCExploreEnabled() && !exploreView && !exploreSelected && !centre);
     // X lays its tabs out with constraints, which undo frames set from here, so the feed narrows through
-    // the safe area its screens already respect (the sidebar's strip is outside them already, Tiling.x's
+    // the safe area its screens already respect (the sidebar's strip is in it already, or outside them, Tiling.x's
     // LBFitContent): the selected tab gets the panel's width on the panel's side. Explore keeps its full
     // frame but takes the feed's width on the other side, shows only through its strip (a mask) and takes
     // touches only there.

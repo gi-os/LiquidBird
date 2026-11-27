@@ -87,6 +87,7 @@ static const void *kLBGlassTabBar = &kLBGlassTabBar;
 static const void *kLBWantedAlpha = &kLBWantedAlpha;
 static const void *kLBTiled = &kLBTiled;
 static const void *kLBSideStrip = &kLBSideStrip;
+static const void *kLBSidebarSolid = &kLBSidebarSolid;
 void LBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);   // Debug.x: shown in the layout copy
 
 // The strip down the trailing edge the Duo's status bar runs in (a safe area on that side only), or 0.
@@ -121,8 +122,8 @@ CGFloat LBSidebarStrip(UIWindow *w) {
     return r > 0 ? r : LBStripDefault;
 }
 
-// The Duo's poses: a window wider than an iPhone held upright, or one with the side strip.
-static BOOL LBSidebarWanted(UIWindow *w) {
+// The Duo's poses: a window wider than an iPhone held upright, or one with the side strip. Also HomeTabs.x's.
+BOOL LBSidebarWanted(UIWindow *w) {
     if (!w) return NO;
     return w.bounds.size.width >= LBSidebarWindow || LBSideStrip(w) > 0;
 }
@@ -160,13 +161,14 @@ static void LBKeepSideStrip(UIViewController *root) {
     root.additionalSafeAreaInsets = extra;
 }
 
-// X's own screens end where the sidebar's strip begins rather than running on under it: what X lays out from its
-// view's width instead of the safe area (an article's floating action bar, scroll bars, the docks) went under the
-// sidebar. T1HostViewController gives its child (XTabbedAppNavigationViewController) its whole bounds once,
-// autoresizing, and never lays it out again, so the child is narrowed here. Inside, the right safe area is then 0, and
-// X's layout metrics take the window's side insets only for a view exactly as wide as the window, so the text keeps
-// its width (folded, 382pt either way). The columns (LBCStrip) place themselves; what's presented (sheets, the media
-// viewer) sits in the window's own transition views, full width.
+// Where the window's own safe area has the sidebar's strip in it (the Duo's status bar strip: folded, and unfolded on
+// its side), X's screens run on under the sidebar's glass: X's layout metrics take the window's side insets, so text
+// keeps clear of the strip and only the feed's photos and backgrounds show under the glass. Where the sidebar shows
+// with no such inset (the Duo unfolded and upright, an iPad) nothing tells X's layout about it and its text would run
+// on under the rail, so there X's screens end where the strip begins instead. T1HostViewController gives its child
+// (XTabbedAppNavigationViewController) its whole bounds once, autoresizing, and never lays it out again, so the child
+// is narrowed, or given its width back, here. The columns (LBCStrip) place themselves; what's presented (sheets, the
+// media viewer) sits in the window's own transition views, full width.
 static const void *kLBContentNarrowed = &kLBContentNarrowed;
 
 static void LBFitContent(UIViewController *root) {
@@ -174,7 +176,8 @@ static void LBFitContent(UIViewController *root) {
     UIWindow *w = host.window;
     if (!w || w.rootViewController != root) return;
     UIView *bar = objc_getAssociatedObject(w, kLBSidebar);
-    CGFloat strip = bar.superview == host && LBSidebarWanted(w) ? LBSidebarStrip(w) : 0;   // the width LBUpdateSidebar gives it
+    // The width LBUpdateSidebar gives the sidebar, where the window's safe area doesn't already hold it.
+    CGFloat strip = bar.superview == host && LBSidebarWanted(w) && LBSideStrip(w) <= 0 ? LBSidebarStrip(w) : 0;
     BOOL was = [objc_getAssociatedObject(host, kLBContentNarrowed) boolValue];
     if (strip <= 0 && !was) return;   // ordinary iPhones held upright: X's own frames, untouched
     objc_setAssociatedObject(host, kLBContentNarrowed, @(strip > 0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -191,7 +194,7 @@ static void LBFitContent(UIViewController *root) {
     }
 }
 
-static UIVisualEffectView *LBGlassView(UIColor *tint) {
+UIVisualEffectView *LBGlassView(UIColor *tint) {   // also HomeTabs.x's
     UIVisualEffect *effect;
     if (@available(iOS 26, *)) {
         UIGlassEffect *g = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
@@ -241,6 +244,7 @@ void LBCRelayout(UIWindow *w);   // Columns.x: lays the unfolded tabs out again
 void LBCCloseColumns(UIWindow *w);   // Columns.x: closes every column, without animation
 CGRect LBCFitScreen(UIViewController *vc, CGRect frame);   // Columns.x: a tab's screen, across its side
 NSInteger LBCFeedPosition(void);           // Columns.x: -1 left, 0 full width, 1 right
+CGFloat LBHomeTabsReclaim(UIViewController *home);   // HomeTabs.x: the row's height, where its glass bar sits in the top bar
 void LBCSetFeedPosition(NSInteger side);
 
 static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id target, SEL action, NSString *label) {
@@ -260,6 +264,7 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 // little in from the display's rounded corner (gi-os/twitter's ClassicSidebar centerOffset, -5).
 @property (nonatomic) CGFloat centreOffset;
 @property (nonatomic) BOOL composeHidden;
+@property (nonatomic) BOOL solid;         // black under the glass: while a column panel is open
 @property (nonatomic, copy) void (^menuAction)(void);
 @property (nonatomic, copy) void (^composeAction)(void);
 @property (nonatomic, copy) void (^settingsAction)(void);
@@ -276,9 +281,10 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        // The strip is the sidebar's, black under its glass: the feed's photos and the column panels ran on under
-        // it and showed around the glass.
-        self.backgroundColor = UIColor.blackColor;
+        // Glass over the feed, which runs on under it wherever X's layout knows about the strip (LBFitContent). The
+        // strip turns black only while a column panel is open (setSolid:, from Columns.x): the panels slide in and
+        // out from under it and showed around the glass.
+        self.backgroundColor = UIColor.clearColor;
         _logoGlass = LBGlassView(nil);
         [self addSubview:_logoGlass];
         _logo = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -306,9 +312,21 @@ static UIButton *LBGlassButton(UIView *glass, NSString *symbol, CGFloat size, id
     return self;
 }
 
-// The whole strip takes its touches: what's under it can't be seen, so a tap there mustn't open it.
+// Black, the whole strip takes its touches: what's under it can't be seen, so a tap there mustn't open it. Clear,
+// only its glass does (a little past its edge), and the feed showing around it takes its own.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return CGRectContainsPoint(self.bounds, point);
+    if (self.solid) return CGRectContainsPoint(self.bounds, point);
+    return (!_rail.hidden && CGRectContainsPoint(CGRectInset(_rail.frame, -6, -6), point)) ||
+           CGRectContainsPoint(CGRectInset(_logoGlass.frame, -6, -6), point);
+}
+
+- (void)setSolid:(BOOL)solid {
+    if (_solid == solid) return;
+    _solid = solid;
+    UIColor *colour = solid ? UIColor.blackColor : UIColor.clearColor;
+    if (!self.window || UIAccessibilityIsReduceMotionEnabled()) { self.backgroundColor = colour; return; }
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionBeginFromCurrentState
+                     animations:^{ self.backgroundColor = colour; } completion:nil];
 }
 
 // The whole logo glass is the logo's: the bird inside is only 24pt of the 40pt circle.
@@ -555,6 +573,7 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
         bar.composeAction = ^{ LBCompose(weakWindow); };
         bar.settingsAction = ^{ LBOpenNeoFreeBirdSettings(weakWindow); };
         objc_setAssociatedObject(w, kLBSidebar, bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        bar.solid = [objc_getAssociatedObject(w, kLBSidebarSolid) boolValue];
     }
     // Grok stays out of the rail; the rest keep their places in the app's own list.
     NSMutableArray<UIView *> *shown = [NSMutableArray array];
@@ -569,7 +588,7 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
     CGFloat strip = LBStripWidth(host);
     if (bar.superview != host) {
         [host addSubview:bar];
-        [host setNeedsLayout];   // X's screens give the strip up (LBFitContent)
+        [host setNeedsLayout];   // X's screens give the strip up where they must (LBFitContent)
     }
     [host bringSubviewToFront:bar];
     bar.frame = CGRectMake(host.bounds.size.width - strip, 0, strip, host.bounds.size.height);
@@ -581,6 +600,13 @@ static void LBUpdateSidebar(UIWindow *w, NSArray<UIView *> *tabs, NSInteger sele
     [bar setTabs:shown selected:shownSelected activate:^(NSInteger i) {
         if (i < (NSInteger)index.count) activate(index[i].integerValue);
     }];
+}
+
+// For Columns.x: the strip is black while a column panel is open (or still sliding away), clear otherwise.
+void LBSidebarSetSolid(UIWindow *w, BOOL solid) {
+    if (!w) return;
+    objc_setAssociatedObject(w, kLBSidebarSolid, @(solid), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ((LBSidebar *)objc_getAssociatedObject(w, kLBSidebar)).solid = solid;
 }
 
 // MARK: - X's Liquid Glass tab bar
@@ -932,7 +958,9 @@ static void LBShiftHome(UIViewController *home) {
             LBLog(@"Home timeline extra measured %.0f -> %.0f (safe top %.0f)", was, measured, view.safeAreaInsets.top);
         objc_setAssociatedObject(home, kLBHomeExtra, @(measured), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    CGFloat extra = hide ? measured : 0;
+    // An ordinary iPhone: the row of timelines is the glass bar in the top bar (HomeTabs.x), and the band X kept
+    // for the row under the bar goes back to the timeline.
+    CGFloat extra = hide ? measured : -LBHomeTabsReclaim(home);
     UIEdgeInsets insets = pager.additionalSafeAreaInsets;
     if (fabs(insets.top - extra) < 0.5) return;
     LBLog(@"Home timeline inset %.0f -> %.0f", insets.top, extra);
@@ -1146,7 +1174,7 @@ static void LBRefitCarousel(UIScrollView *scroll) {
 
 // How far X's canvas runs on past the display area a post's column sits in, where X centres the column: the
 // display area's trailing margin, less what the window's safe area already takes (X counts that only for a canvas
-// as wide as the window, before LBFitContent narrows it), or 0. X centres only with room to spare, so it's 0
+// as wide as the window), or 0. X centres only with room to spare, so it's 0
 // folded, in a column and beside the Explore panel. X's centring leaves the same margin on both sides, to the pixel
 // (TFNLayoutMetrics' line-length insets), so a display area that isn't centred (one X sets for a part of a post) is
 // never read as room. Never for a quoted post's carousel, which stays inside the quote's border (0x100 in its
@@ -1271,9 +1299,8 @@ static UIView *LBCarouselHit(UITableViewCell *cell, CGPoint point, UIEvent *even
 
 // An X Article (T1ArticleViewController) floats its reply/repost/like/bookmark bar (InlineActionsFloatingBar, a
 // subview of the article's view) over the text, placed by frame 16pt in from both sides of the view whatever its safe
-// area, though the text keeps to it. X's screens end at the sidebar (LBFitContent), but where an article's view does
-// reach the side strip (shown over the app, or before the sidebar has taken its strip) the bar ran on under it: it
-// ends the same 16pt short of the safe area instead. X sets that frame again as the article lays out, as its safe area
+// area, though the text keeps to it. X's screens run on under the sidebar's glass (LBFitContent), where the bar ran
+// on under it too: it ends the same 16pt short of the safe area instead. X sets that frame again as the article lays out, as its safe area
 // changes and on every scroll (the bar slides away as you read), so it's kept here rather than fixed once.
 static CGRect LBFitArticleBar(UIView *bar, CGRect frame) {
     UIView *article = bar.superview;
